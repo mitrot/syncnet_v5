@@ -1,0 +1,39 @@
+# Core dependencies
+asyncio>=3.4.3
+aiohttp>=3.8.1
+websockets>=10.3
+cryptography>=37.0.2
+pyjwt>=2.4.0
+python-dotenv>=0.20.0
+
+# Database
+aiosqlite>=0.17.0
+redis>=4.2.2
+
+# Testing
+pytest>=7.1.1
+pytest-asyncio>=0.18.3
+pytest-cov>=3.0.0
+pytest-mock>=3.8.2
+
+# Development
+black>=22.3.0
+isort>=5.10.1
+flake8>=4.0.1
+mypy>=0.950
+pylint>=2.13.9
+
+# Monitoring
+prometheus-client>=0.14.1
+statsd>=3.3.0
+
+# Documentation
+sphinx>=5.0.2
+sphinx-rtd-theme>=1.0.0
+
+# Optional dependencies
+uvloop>=0.16.0; platform_system != "Windows"  # Faster event loop (Unix only)
+orjson>=3.6.7  # Faster JSON processing
+ujson>=5.4.0  # Alternative JSON implementation
+python-snappy>=0.6.1  # Compression
+msgpack>=1.0.3  # MessagePack serialization 
