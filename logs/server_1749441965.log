@@ -1,0 +1,78 @@
+2025-06-09 00:06:05,852 - server.main - INFO - Starting SyncNet v5 Server: server3
+2025-06-09 00:06:05,852 - server.main - INFO - Configuration: localhost:8002
+2025-06-09 00:06:05,852 - server.main - INFO - Log Level: INFO
+2025-06-09 00:06:05,852 - storage.data/server3.db - INFO - Database initialized successfully
+2025-06-09 00:06:05,862 - election.server3 - INFO - Election initialized for server3 at position 2
+2025-06-09 00:06:05,863 - heartbeat.server3 - INFO - Heartbeat monitor initialized for server3
+2025-06-09 00:06:05,863 - server.server3 - INFO - SyncNet server server3 initialized
+2025-06-09 00:06:05,865 - server.main - INFO - Initializing server components...
+2025-06-09 00:06:05,865 - server.main - INFO - Starting server services...
+2025-06-09 00:06:05,865 - server.server3 - INFO - Starting SyncNet server server3
+2025-06-09 00:06:05,867 - storage.data/data/server3_messages.db.db - INFO - Database initialized successfully
+2025-06-09 00:06:05,868 - election.server3 - INFO - Election initialized for server3 at position 2
+2025-06-09 00:06:05,868 - heartbeat.server3 - INFO - Heartbeat monitor initialized for server3
+2025-06-09 00:06:05,875 - server.server3 - INFO - TCP server listening on localhost:8002
+2025-06-09 00:06:05,877 - server.server3 - INFO - UDP heartbeat listening on localhost:8022
+2025-06-09 00:06:05,877 - server.server3 - INFO - UDP election listening on localhost:8032
+2025-06-09 00:06:05,877 - server.server3 - INFO - TCP server listening on localhost:8002
+2025-06-09 00:06:05,877 - server.server3 - INFO - UDP server thread started
+2025-06-09 00:06:05,879 - server.server3 - INFO - UDP election thread started
+2025-06-09 00:06:05,879 - heartbeat.server3 - INFO - Heartbeat sending thread started
+2025-06-09 00:06:05,879 - heartbeat.server3 - INFO - Failure monitoring thread started
+2025-06-09 00:06:05,879 - heartbeat.server3 - INFO - Heartbeat monitoring started
+2025-06-09 00:06:05,879 - heartbeat.server3 - INFO - Server server1 status changed: unknown → active
+2025-06-09 00:06:05,879 - server.server3 - INFO - Server server3 started successfully on TCP:8002
+2025-06-09 00:06:05,879 - heartbeat.server3 - INFO - Server server2 status changed: unknown → active
+2025-06-09 00:06:05,879 - server.main - INFO - server3 is now running!
+2025-06-09 00:06:05,879 - server.main - INFO - TCP Port: 8002
+2025-06-09 00:06:05,879 - server.main - INFO - Heartbeat Port: 8022
+2025-06-09 00:06:05,879 - server.main - INFO - Election Port: 8032
+2025-06-09 00:06:05,879 - server.main - INFO - Server is ready to accept connections
+2025-06-09 00:06:05,879 - server.main - INFO - Server running... Press Ctrl+C to stop
+2025-06-09 00:06:09,043 - election.server3 - INFO - Starting election election_1749441969_7cfe0a26
+2025-06-09 00:06:09,882 - heartbeat.server3 - INFO - Server server2 status changed: active → suspected
+2025-06-09 00:06:11,883 - heartbeat.server3 - INFO - Server server2 status changed: suspected → failed
+2025-06-09 00:06:11,883 - heartbeat.server3 - WARNING - Server server2 detected as FAILED
+2025-06-09 00:06:11,883 - server.server3 - WARNING - Server failure detected: server2
+2025-06-09 00:06:13,881 - server.server3 - INFO - Starting automatic leader election
+2025-06-09 00:06:13,881 - election.server3 - INFO - Syncing failed servers - current statuses: {'server1': 'active', 'server2': 'failed'}
+2025-06-09 00:06:13,881 - election.server3 - INFO - Failed servers before sync: set()
+2025-06-09 00:06:13,881 - election.server3 - INFO - Synced server2 as failed from heartbeat status
+2025-06-09 00:06:13,881 - election.server3 - INFO - Failed servers after sync: {'server2'}
+2025-06-09 00:06:13,881 - election.server3 - INFO - Syncing failed servers - current statuses: {'server1': 'active', 'server2': 'failed'}
+2025-06-09 00:06:13,881 - election.server3 - INFO - Failed servers before sync: {'server2'}
+2025-06-09 00:06:13,881 - election.server3 - INFO - Failed servers after sync: {'server2'}
+2025-06-09 00:06:13,883 - election.server3 - INFO - Election already in progress
+2025-06-09 00:06:13,884 - server.server3 - INFO - Started election election_1749441969_7cfe0a26, sent to server1
+2025-06-09 00:06:17,044 - election.server3 - WARNING - Election election_1749441969_7cfe0a26 timed out after 8.0s
+2025-06-09 00:06:17,044 - election.server3 - INFO - Election state reset
+2025-06-09 00:06:17,044 - election.server3 - INFO - Retrying election in 3.79s
+2025-06-09 00:06:20,831 - election.server3 - INFO - Retrying election after timeout
+2025-06-09 00:06:20,831 - election.server3 - INFO - Starting election election_1749441980_d5b3bb9c
+2025-06-09 00:06:28,833 - election.server3 - WARNING - Election election_1749441980_d5b3bb9c timed out after 8.0s
+2025-06-09 00:06:28,833 - election.server3 - INFO - Election state reset
+2025-06-09 00:06:28,833 - election.server3 - INFO - Retrying election in 3.68s
+2025-06-09 00:06:32,511 - election.server3 - INFO - Retrying election after timeout
+2025-06-09 00:06:32,511 - election.server3 - INFO - Starting election election_1749441992_0bd92b67
+2025-06-09 00:06:40,512 - election.server3 - WARNING - Election election_1749441992_0bd92b67 timed out after 8.0s
+2025-06-09 00:06:40,512 - election.server3 - INFO - Election state reset
+2025-06-09 00:06:40,512 - election.server3 - INFO - Retrying election in 3.23s
+2025-06-09 00:06:43,747 - election.server3 - INFO - Retrying election after timeout
+2025-06-09 00:06:43,747 - election.server3 - INFO - Starting election election_1749442003_adf17e62
+2025-06-09 00:06:47,893 - heartbeat.server3 - INFO - Server server1 status changed: active → suspected
+2025-06-09 00:06:49,894 - heartbeat.server3 - INFO - Server server1 status changed: suspected → failed
+2025-06-09 00:06:49,894 - heartbeat.server3 - WARNING - Server server1 detected as FAILED
+2025-06-09 00:06:49,894 - server.server3 - WARNING - Server failure detected: server1
+2025-06-09 00:06:51,748 - election.server3 - WARNING - Election election_1749442003_adf17e62 timed out after 8.0s
+2025-06-09 00:06:51,748 - election.server3 - INFO - Election state reset
+2025-06-09 00:06:51,748 - election.server3 - INFO - Retrying election in 2.25s
+2025-06-09 00:06:54,004 - election.server3 - INFO - Retrying election after timeout
+2025-06-09 00:06:54,004 - election.server3 - INFO - Starting election election_1749442014_47613c9b
+2025-06-09 00:07:02,005 - election.server3 - WARNING - Election election_1749442014_47613c9b timed out after 8.0s
+2025-06-09 00:07:02,006 - election.server3 - INFO - Election state reset
+2025-06-09 00:07:02,006 - election.server3 - INFO - Retrying election in 2.32s
+2025-06-09 00:07:04,326 - election.server3 - INFO - Retrying election after timeout
+2025-06-09 00:07:04,326 - election.server3 - INFO - Starting election election_1749442024_ff9bc130
+2025-06-09 00:07:12,328 - election.server3 - WARNING - Election election_1749442024_ff9bc130 timed out after 8.0s
+2025-06-09 00:07:12,328 - election.server3 - INFO - Election state reset
+2025-06-09 00:07:12,328 - election.server3 - INFO - Retrying election in 3.41s

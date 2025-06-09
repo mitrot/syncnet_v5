@@ -1,0 +1,52 @@
+2025-06-09 00:05:11,610 - server.main - INFO - Starting SyncNet v5 Server: server2
+2025-06-09 00:05:11,610 - server.main - INFO - Configuration: localhost:8001
+2025-06-09 00:05:11,612 - server.main - INFO - Log Level: INFO
+2025-06-09 00:05:11,614 - storage.data/server2.db - INFO - Database initialized successfully
+2025-06-09 00:05:11,615 - election.server2 - INFO - Election initialized for server2 at position 1
+2025-06-09 00:05:11,616 - heartbeat.server2 - INFO - Heartbeat monitor initialized for server2
+2025-06-09 00:05:11,616 - server.server2 - INFO - SyncNet server server2 initialized
+2025-06-09 00:05:11,618 - server.main - INFO - Initializing server components...
+2025-06-09 00:05:11,618 - server.main - INFO - Starting server services...
+2025-06-09 00:05:11,618 - server.server2 - INFO - Starting SyncNet server server2
+2025-06-09 00:05:11,620 - storage.data/data/server2_messages.db.db - INFO - Database initialized successfully
+2025-06-09 00:05:11,621 - election.server2 - INFO - Election initialized for server2 at position 1
+2025-06-09 00:05:11,621 - heartbeat.server2 - INFO - Heartbeat monitor initialized for server2
+2025-06-09 00:05:11,627 - server.server2 - INFO - TCP server listening on localhost:8001
+2025-06-09 00:05:11,628 - server.server2 - INFO - UDP heartbeat listening on localhost:8021
+2025-06-09 00:05:11,629 - server.server2 - INFO - UDP election listening on localhost:8031
+2025-06-09 00:05:11,629 - server.server2 - INFO - TCP server listening on localhost:8001
+2025-06-09 00:05:11,629 - server.server2 - INFO - UDP server thread started
+2025-06-09 00:05:11,629 - server.server2 - INFO - UDP election thread started
+2025-06-09 00:05:11,629 - heartbeat.server2 - INFO - Heartbeat sending thread started
+2025-06-09 00:05:11,629 - heartbeat.server2 - INFO - Failure monitoring thread started
+2025-06-09 00:05:11,629 - heartbeat.server2 - INFO - Heartbeat monitoring started
+2025-06-09 00:05:11,633 - heartbeat.server2 - INFO - Server server1 status changed: unknown → active
+2025-06-09 00:05:11,633 - server.server2 - INFO - Server server2 started successfully on TCP:8001
+2025-06-09 00:05:11,633 - heartbeat.server2 - INFO - Server server3 status changed: unknown → active
+2025-06-09 00:05:11,633 - server.main - INFO - server2 is now running!
+2025-06-09 00:05:11,633 - server.main - INFO - TCP Port: 8001
+2025-06-09 00:05:11,633 - server.main - INFO - Heartbeat Port: 8021
+2025-06-09 00:05:11,633 - server.main - INFO - Election Port: 8031
+2025-06-09 00:05:11,633 - server.main - INFO - Server is ready to accept connections
+2025-06-09 00:05:11,633 - server.main - INFO - Server running... Press Ctrl+C to stop
+2025-06-09 00:05:15,634 - heartbeat.server2 - INFO - Server server3 status changed: active → suspected
+2025-06-09 00:05:17,635 - heartbeat.server2 - INFO - Server server3 status changed: suspected → failed
+2025-06-09 00:05:17,635 - heartbeat.server2 - WARNING - Server server3 detected as FAILED
+2025-06-09 00:05:17,636 - server.server2 - WARNING - Server failure detected: server3
+2025-06-09 00:05:19,633 - server.server2 - INFO - Starting automatic leader election
+2025-06-09 00:05:19,633 - election.server2 - INFO - Syncing failed servers - current statuses: {'server1': 'active', 'server3': 'failed'}
+2025-06-09 00:05:19,633 - election.server2 - INFO - Failed servers before sync: set()
+2025-06-09 00:05:19,633 - election.server2 - INFO - Synced server3 as failed from heartbeat status
+2025-06-09 00:05:19,633 - election.server2 - INFO - Failed servers after sync: {'server3'}
+2025-06-09 00:05:19,633 - election.server2 - INFO - Syncing failed servers - current statuses: {'server1': 'active', 'server3': 'failed'}
+2025-06-09 00:05:19,633 - election.server2 - INFO - Failed servers before sync: {'server3'}
+2025-06-09 00:05:19,635 - election.server2 - INFO - Failed servers after sync: {'server3'}
+2025-06-09 00:05:19,635 - election.server2 - INFO - Starting election election_1749441919_7ed4e6e8
+2025-06-09 00:05:19,638 - server.server2 - INFO - Started election election_1749441919_7ed4e6e8, sent to server1
+2025-06-09 00:05:19,638 - election.server2 - INFO - Became leader! Election election_1749441919_7ed4e6e8 completed in 0.00s
+2025-06-09 00:05:19,641 - election.server2 - INFO - Leader announcement completed for server2
+2025-06-09 00:05:28,258 - heartbeat.server2 - INFO - Server server3 status changed: failed → active
+2025-06-09 00:05:28,258 - heartbeat.server2 - INFO - Server server3 recovered to ACTIVE
+2025-06-09 00:05:28,258 - server.server2 - INFO - Server recovery detected: server3
+2025-06-09 00:05:28,258 - election.server2 - INFO - Marked server3 as recovered in ring topology
+2025-06-09 00:05:36,265 - election.server2 - INFO - Accepted server3 as leader. Election completed in 16.63s

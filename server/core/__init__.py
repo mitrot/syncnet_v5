@@ -1,3 +1,0 @@
-"""
-server/core package
-"""

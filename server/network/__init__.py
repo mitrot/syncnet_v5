@@ -1,3 +1,0 @@
-"""
-server/network package
-"""

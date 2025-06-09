@@ -1,0 +1,42 @@
+2025-06-09 00:05:28,225 - server.main - INFO - Starting SyncNet v5 Server: server3
+2025-06-09 00:05:28,225 - server.main - INFO - Configuration: localhost:8002
+2025-06-09 00:05:28,225 - server.main - INFO - Log Level: INFO
+2025-06-09 00:05:28,237 - storage.data/server3.db - INFO - Database initialized successfully
+2025-06-09 00:05:28,237 - election.server3 - INFO - Election initialized for server3 at position 2
+2025-06-09 00:05:28,237 - heartbeat.server3 - INFO - Heartbeat monitor initialized for server3
+2025-06-09 00:05:28,237 - server.server3 - INFO - SyncNet server server3 initialized
+2025-06-09 00:05:28,237 - server.main - INFO - Initializing server components...
+2025-06-09 00:05:28,237 - server.main - INFO - Starting server services...
+2025-06-09 00:05:28,237 - server.server3 - INFO - Starting SyncNet server server3
+2025-06-09 00:05:28,242 - storage.data/data/server3_messages.db.db - INFO - Database initialized successfully
+2025-06-09 00:05:28,242 - election.server3 - INFO - Election initialized for server3 at position 2
+2025-06-09 00:05:28,242 - heartbeat.server3 - INFO - Heartbeat monitor initialized for server3
+2025-06-09 00:05:28,242 - server.server3 - INFO - TCP server listening on localhost:8002
+2025-06-09 00:05:28,252 - server.server3 - INFO - UDP heartbeat listening on localhost:8022
+2025-06-09 00:05:28,252 - server.server3 - INFO - UDP election listening on localhost:8032
+2025-06-09 00:05:28,252 - server.server3 - INFO - TCP server listening on localhost:8002
+2025-06-09 00:05:28,252 - server.server3 - INFO - UDP server thread started
+2025-06-09 00:05:28,255 - server.server3 - INFO - UDP election thread started
+2025-06-09 00:05:28,255 - heartbeat.server3 - INFO - Heartbeat sending thread started
+2025-06-09 00:05:28,255 - heartbeat.server3 - INFO - Failure monitoring thread started
+2025-06-09 00:05:28,255 - heartbeat.server3 - INFO - Heartbeat monitoring started
+2025-06-09 00:05:28,256 - heartbeat.server3 - INFO - Server server1 status changed: unknown → active
+2025-06-09 00:05:28,257 - server.server3 - INFO - Server server3 started successfully on TCP:8002
+2025-06-09 00:05:28,257 - heartbeat.server3 - INFO - Server server2 status changed: unknown → active
+2025-06-09 00:05:28,257 - server.main - INFO - server3 is now running!
+2025-06-09 00:05:28,258 - server.main - INFO - TCP Port: 8002
+2025-06-09 00:05:28,258 - server.main - INFO - Heartbeat Port: 8022
+2025-06-09 00:05:28,258 - server.main - INFO - Election Port: 8032
+2025-06-09 00:05:28,258 - server.main - INFO - Server is ready to accept connections
+2025-06-09 00:05:28,258 - server.main - INFO - Server running... Press Ctrl+C to stop
+2025-06-09 00:05:36,257 - server.server3 - INFO - Starting automatic leader election
+2025-06-09 00:05:36,257 - election.server3 - INFO - Syncing failed servers - current statuses: {'server1': 'active', 'server2': 'active'}
+2025-06-09 00:05:36,257 - election.server3 - INFO - Failed servers before sync: set()
+2025-06-09 00:05:36,258 - election.server3 - INFO - Failed servers after sync: set()
+2025-06-09 00:05:36,258 - election.server3 - INFO - Syncing failed servers - current statuses: {'server1': 'active', 'server2': 'active'}
+2025-06-09 00:05:36,258 - election.server3 - INFO - Failed servers before sync: set()
+2025-06-09 00:05:36,258 - election.server3 - INFO - Failed servers after sync: set()
+2025-06-09 00:05:36,258 - election.server3 - INFO - Starting election election_1749441936_a91c0e95
+2025-06-09 00:05:36,259 - server.server3 - INFO - Started election election_1749441936_a91c0e95, sent to server1
+2025-06-09 00:05:36,259 - election.server3 - INFO - Became leader! Election election_1749441936_a91c0e95 completed in 0.00s
+2025-06-09 00:05:36,267 - election.server3 - INFO - Leader announcement completed for server3
