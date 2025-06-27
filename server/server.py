@@ -40,6 +40,10 @@ class SyncNetServer:
         self.udp_server_socket: Optional[socket.socket] = None
         self.client_connections: Dict[str, Any] = {}
         
+        # Chat room state
+        self.chat_rooms: Dict[str, set] = {} # room_name -> set of client_ids
+        self.client_to_room: Dict[str, str] = {} # client_id -> room_name
+
         self._lock = threading.RLock()
         self._main_thread: Optional[threading.Thread] = None
         self._threads: List[threading.Thread] = []
@@ -199,6 +203,8 @@ class SyncNetServer:
                     self.heartbeat.receive_heartbeat(message)
                 elif msg_type == "leader_announcement":
                     self._handle_leader_announcement(message)
+                elif msg_type == "state_replication":
+                    self._handle_state_replication(message['payload'])
                 
             except socket.timeout:
                 continue
@@ -275,30 +281,150 @@ class SyncNetServer:
             self.current_leader = self.server_id
     
     def _handle_client(self, client_socket: socket.socket):
-        """Handle an individual client connection."""
-        # Simplified client handling
+        """
+        Handle a new client connection.
+        If this server is the leader, it keeps the connection.
+        If not, it sends a redirect and closes the connection.
+        """
+        client_id = f"{client_socket.getpeername()[0]}:{client_socket.getpeername()[1]}"
+
+        # Immediately redirect if not the leader
+        if not self.is_leader:
+            self._send_redirect(client_socket)
+            client_socket.close()
+            return
+
+        # --- From this point on, we are the leader ---
+        self.client_connections[client_id] = client_socket
+        self.logger.info(f"Client {client_id} connected to leader.")
+
         try:
             while self._running:
                 data = client_socket.recv(NETWORK_CONSTANTS['buffer_size'])
                 if not data:
-                    break
+                    break # Client disconnected
                 
-                message = json.loads(data.decode())
-                if self.is_leader:
-                    self.logger.info(f"Leader received message: {message}")
-                    # In a full implementation, leader would process and distribute this.
-                else:
-                    # Forward to leader or reject
-                    client_socket.send(json.dumps({"type": "error", "message": "Not the leader"}).encode())
+                request = json.loads(data.decode())
+                command = request.get("command")
+                payload = request.get("payload")
 
-        except (ConnectionResetError, BrokenPipeError):
-            self.logger.info("Client disconnected.")
+                self.logger.debug(f"Leader received command '{command}' from {client_id}")
+                self._handle_client_command(client_id, command, payload)
+
+        except (ConnectionResetError, BrokenPipeError, json.JSONDecodeError):
+            self.logger.info(f"Client {client_id} disconnected.")
         except Exception as e:
             if self._running:
-                self.logger.error(f"Client handling error: {e}")
+                self.logger.error(f"Client handling error for {client_id}: {e}")
         finally:
-            client_socket.close()
+            self._cleanup_client(client_id)
+            
+    def _handle_client_command(self, client_id: str, command: str, payload: dict):
+        """Process a command from a client. Must be run on the leader."""
+        handler_map = {
+            "create_room": self._handle_create_room,
+            "join_room": self._handle_join_room,
+            "list_rooms": self._handle_list_rooms,
+            "leave_room": self._handle_leave_room,
+            "chat": self._handle_chat_message,
+            "whereami": self._handle_whereami
+        }
+        
+        handler = handler_map.get(command)
+        if handler:
+            handler(client_id, payload)
+        else:
+            self._send_to_client(client_id, {"type": "error", "payload": f"Unknown command: {command}"})
 
+    def _handle_create_room(self, client_id: str, payload: dict):
+        room_name = payload.get("room_name")
+        if not room_name:
+            return self._send_to_client(client_id, {"type": "error", "payload": "Room name is required."})
+
+        with self._lock:
+            if room_name in self.chat_rooms:
+                return self._send_to_client(client_id, {"type": "error", "payload": f"Room '{room_name}' already exists."})
+            
+            # Create room and automatically join the creator
+            self.chat_rooms[room_name] = {client_id}
+            self.client_to_room[client_id] = room_name
+            self._replicate_state("create_room", {"room_name": room_name, "client_id": client_id})
+
+        self._send_to_client(client_id, {"type": "room_joined", "payload": {"room_name": room_name, "message": f"Successfully created and joined '{room_name}'."}})
+
+    def _handle_join_room(self, client_id: str, payload: dict):
+        room_name = payload.get("room_name")
+        if not room_name:
+            return self._send_to_client(client_id, {"type": "error", "payload": "Room name is required."})
+
+        with self._lock:
+            if room_name not in self.chat_rooms:
+                return self._send_to_client(client_id, {"type": "error", "payload": f"Room '{room_name}' does not exist."})
+            
+            # Add client to room
+            self.chat_rooms[room_name].add(client_id)
+            self.client_to_room[client_id] = room_name
+            self._replicate_state("join_room", {"room_name": room_name, "client_id": client_id})
+
+        self._send_to_client(client_id, {"type": "room_joined", "payload": {"room_name": room_name, "message": f"Successfully joined '{room_name}'."}})
+
+    def _handle_list_rooms(self, client_id: str, payload: dict):
+        with self._lock:
+            room_list = list(self.chat_rooms.keys())
+        self._send_to_client(client_id, {"type": "room_list", "payload": room_list})
+        
+    def _handle_leave_room(self, client_id: str, payload: dict):
+        with self._lock:
+            room_name = self.client_to_room.pop(client_id, None)
+            if room_name and room_name in self.chat_rooms:
+                self.chat_rooms[room_name].discard(client_id)
+                self._replicate_state("leave_room", {"room_name": room_name, "client_id": client_id})
+                
+        self._send_to_client(client_id, {"type": "room_left", "payload": {"message": "You have left the room."}})
+
+    def _handle_chat_message(self, client_id: str, payload: dict):
+        message = payload.get("message")
+        if not message:
+            return
+
+        with self._lock:
+            room_name = self.client_to_room.get(client_id)
+            if not room_name:
+                return self._send_to_client(client_id, {"type": "error", "payload": "You are not in a room."})
+
+            chat_message = {"type": "chat", "payload": {"sender": client_id, "message": message}}
+            # Broadcast to everyone in the room except the sender
+            for member_id in self.chat_rooms.get(room_name, set()):
+                if member_id != client_id:
+                    self._send_to_client(member_id, chat_message)
+    
+    def _handle_whereami(self, client_id: str, payload: dict):
+        with self._lock:
+            room_name = self.client_to_room.get(client_id, "You are not in a room.")
+        self._send_to_client(client_id, {"type": "info", "payload": room_name})
+
+    def _cleanup_client(self, client_id: str):
+        """Clean up resources for a disconnected client."""
+        with self._lock:
+            if client_id in self.client_connections:
+                self.client_connections.pop(client_id).close()
+
+            room_name = self.client_to_room.pop(client_id, None)
+            if room_name and room_name in self.chat_rooms:
+                self.chat_rooms[room_name].discard(client_id)
+                self.logger.info(f"Client {client_id} removed from room {room_name}.")
+                self._replicate_state("leave_room", {"room_name": room_name, "client_id": client_id})
+                
+    def _send_to_client(self, client_id: str, message: dict):
+        """Send a JSON message to a specific client."""
+        if client_id in self.client_connections:
+            try:
+                sock = self.client_connections[client_id]
+                sock.sendall(json.dumps(message).encode())
+            except Exception as e:
+                self.logger.error(f"Failed to send message to {client_id}: {e}")
+                self._cleanup_client(client_id)
+                
     def _broadcast_udp(self, message: Dict):
         """Broadcast a UDP message to all other servers."""
         try:
@@ -311,6 +437,49 @@ class SyncNetServer:
         except Exception as e:
             self.logger.error(f"Failed to broadcast UDP message: {e}")
 
+    def _replicate_state(self, action: str, data: dict):
+        """Broadcast a state change to all other servers."""
+        if not self.is_leader:
+            return
+            
+        self.logger.debug(f"Replicating state: {action} with data {data}")
+        replication_message = {
+            "type": "state_replication",
+            "payload": {
+                "action": action,
+                "data": data
+            }
+        }
+        self._broadcast_udp(replication_message)
+        
+    def _handle_state_replication(self, payload: dict):
+        """Apply a state change received from the leader."""
+        if self.is_leader:
+            return # Leaders don't apply replicated state, they create it.
+            
+        action = payload.get("action")
+        data = payload.get("data")
+        self.logger.debug(f"Follower applying state replication: {action}")
+
+        with self._lock:
+            room_name = data.get("room_name")
+            client_id = data.get("client_id")
+
+            if action == "create_room":
+                self.chat_rooms[room_name] = {client_id}
+                self.client_to_room[client_id] = room_name
+            elif action == "join_room":
+                if room_name in self.chat_rooms:
+                    self.chat_rooms[room_name].add(client_id)
+                else: # Edge case: join replication arrives before create
+                    self.chat_rooms[room_name] = {client_id}
+                self.client_to_room[client_id] = room_name
+            elif action == "leave_room":
+                if room_name in self.chat_rooms:
+                    self.chat_rooms[room_name].discard(client_id)
+                if client_id in self.client_to_room:
+                    del self.client_to_room[client_id]
+
     def get_server_status(self) -> Dict[str, Any]:
         """Get comprehensive server status."""
         return {
@@ -321,6 +490,32 @@ class SyncNetServer:
             'active_servers': self.heartbeat.get_active_servers(),
             'server_statuses': self.heartbeat.get_server_statuses()
         }
+
+    def _send_redirect(self, client_socket: socket.socket):
+        """Inform a client that this is not the leader and provide leader info."""
+        if not self.current_leader:
+            self.logger.warning("Redirect requested, but no leader is known. Closing connection.")
+            return
+
+        leader_config = next((c for c in DEFAULT_SERVER_CONFIGS if c.server_id == self.current_leader), None)
+        if not leader_config:
+            self.logger.error(f"Could not find config for leader {self.current_leader}")
+            return
+        
+        redirect_info = {
+            "type": "redirect",
+            "payload": {
+                "leader_id": leader_config.server_id,
+                "leader_host": leader_config.host,
+                "leader_port": leader_config.tcp_port
+            }
+        }
+        
+        try:
+            client_socket.sendall(json.dumps(redirect_info).encode())
+            self.logger.info(f"Redirected client to leader: {self.current_leader}")
+        except Exception as e:
+            self.logger.error(f"Failed to send redirect: {e}")
 
 # Signal handler for graceful shutdown
 _server_instance = None

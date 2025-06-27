@@ -1,0 +1,10 @@
+2025-06-27 17:33:19,728 - main - INFO - Starting SyncNet v5 Server: server2
+2025-06-27 17:33:19,728 - heartbeat.server2 - INFO - Heartbeat monitor initialized
+2025-06-27 17:33:19,728 - server.server2 - INFO - SyncNet server initialized
+2025-06-27 17:33:19,728 - server.server2 - INFO - Server state changed to: STARTING
+2025-06-27 17:33:19,733 - server.server2 - INFO - TCP listening on 8001, UDP on 8021
+2025-06-27 17:33:19,735 - heartbeat.server2 - INFO - Heartbeat monitoring started
+2025-06-27 17:33:19,735 - server.server2 - INFO - Server state changed to: RUNNING
+2025-06-27 17:33:19,735 - server.server2 - INFO - Server started successfully on TCP:8001
+2025-06-27 17:33:24,735 - server.server2 - WARNING - Leader is down or not established. Starting election.
+2025-06-27 17:33:24,735 - server.server2 - INFO - Election result: server3 is the new leader.

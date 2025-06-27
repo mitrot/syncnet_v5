@@ -1,0 +1,23 @@
+2025-06-27 17:33:22,677 - main - INFO - Starting SyncNet v5 Server: server3
+2025-06-27 17:33:22,677 - heartbeat.server3 - INFO - Heartbeat monitor initialized
+2025-06-27 17:33:22,677 - server.server3 - INFO - SyncNet server initialized
+2025-06-27 17:33:22,677 - server.server3 - INFO - Server state changed to: STARTING
+2025-06-27 17:33:22,682 - server.server3 - INFO - TCP listening on 8002, UDP on 8022
+2025-06-27 17:33:22,683 - heartbeat.server3 - INFO - Heartbeat monitoring started
+2025-06-27 17:33:22,683 - server.server3 - INFO - Server state changed to: RUNNING
+2025-06-27 17:33:22,683 - server.server3 - INFO - Server started successfully on TCP:8002
+2025-06-27 17:33:27,684 - server.server3 - WARNING - Leader is down or not established. Starting election.
+2025-06-27 17:33:27,684 - server.server3 - INFO - Election result: server3 is the new leader.
+2025-06-27 17:33:27,684 - server.server3 - INFO - I am now the leader!
+2025-06-27 17:33:37,568 - server.server3 - INFO - New client connection from ('127.0.0.1', 62634)
+2025-06-27 17:33:37,568 - server.server3 - INFO - Client 127.0.0.1:62634 connected to leader.
+2025-06-27 17:33:40,570 - server.server3 - INFO - New client connection from ('127.0.0.1', 62635)
+2025-06-27 17:33:40,570 - server.server3 - INFO - Client 127.0.0.1:62635 connected to leader.
+2025-06-27 17:33:43,592 - server.server3 - INFO - New client connection from ('127.0.0.1', 62636)
+2025-06-27 17:33:43,592 - server.server3 - INFO - Client 127.0.0.1:62636 connected to leader.
+2025-06-27 17:33:46,614 - server.server3 - INFO - New client connection from ('127.0.0.1', 62637)
+2025-06-27 17:33:46,614 - server.server3 - INFO - Client 127.0.0.1:62637 connected to leader.
+2025-06-27 17:33:49,635 - server.server3 - INFO - New client connection from ('127.0.0.1', 62641)
+2025-06-27 17:33:49,635 - server.server3 - INFO - Client 127.0.0.1:62641 connected to leader.
+2025-06-27 17:33:52,661 - server.server3 - INFO - New client connection from ('127.0.0.1', 62642)
+2025-06-27 17:33:52,661 - server.server3 - INFO - Client 127.0.0.1:62642 connected to leader.
