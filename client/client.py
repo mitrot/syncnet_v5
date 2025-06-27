@@ -3,7 +3,6 @@ import sys
 import threading
 import json
 import time
-import logging
 import os
 
 # Robustly add project root to the Python path
@@ -13,14 +12,12 @@ if project_root not in sys.path:
 
 from common.config import DEFAULT_SERVER_CONFIGS
 
-# Configure logging
-logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(message)s')
-
 class SyncNetClient:
     """A command-line client for the SyncNet v5 chat system."""
 
     def __init__(self):
         self.sock: socket.socket = None
+        self.username: str = "Anonymous"
         self.is_connected = False
         self.current_server_index = 0
         self._receive_thread = None
@@ -29,52 +26,107 @@ class SyncNetClient:
         self.current_room = None
         self.prompt_lock = threading.Lock()
         self.state_change_event = threading.Event()
+        self.connection_acknowledged = threading.Event()
+        self.redirect_in_progress = threading.Event()
+
+    def start(self):
+        """Prompt for username and start the main client loop."""
+        self.username = input("Please enter your name: ").strip() or "Anonymous"
+        self._running = True
+        
+        # This outer loop handles maintaining a connection.
+        while self._running:
+            self.connect() # This will block until a connection is made to the leader
+            
+            # This inner loop handles the user interface while connected.
+            while self.is_connected and self._running:
+                if self.in_room:
+                    self.room_menu()
+                else:
+                    self.main_menu()
+            
+            # If the inner loop breaks, we are disconnected.
+            if self._running:
+                print("\n[System] Connection lost. Reconnecting...")
+                time.sleep(2)
 
     def connect(self):
-        """Attempt to connect to a server from the known list."""
-        while not self.is_connected:
+        """Loop until a connection to the leader is established."""
+        while not self.is_connected and self._running:
             server_config = DEFAULT_SERVER_CONFIGS[self.current_server_index]
             host, port = server_config.host, server_config.tcp_port
             try:
-                logging.info(f"Attempting to connect to {server_config.server_id} at {host}:{port}...")
-                self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
-                self.sock.settimeout(3.0) # Timeout for the connection attempt itself
-                self.sock.connect((host, port))
-                self.sock.settimeout(None) # Remove timeout for normal blocking operations
+                if self.sock:
+                    self.sock.close() # Ensure old socket is closed
                 
-                self.is_connected = True
-                self._running = True
-                self._receive_thread = threading.Thread(target=self._receive_messages, daemon=True)
-                self._receive_thread.start()
-                logging.info(f"Successfully connected to {server_config.server_id}.")
-            except (socket.timeout, ConnectionRefusedError) as e:
-                logging.warning(f"Failed to connect to {server_config.server_id}: {e}")
-                self.current_server_index = (self.current_server_index + 1) % len(DEFAULT_SERVER_CONFIGS)
-                time.sleep(1) # Wait before trying the next server
+                self.sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+                self.sock.settimeout(3.0)
+                self.sock.connect((host, port))
+                
+                # We have a socket, now perform the handshake
+                self.sock.settimeout(None)
+                self.connection_acknowledged.clear()
+                self.redirect_in_progress.clear()
+                self.send_command("set_username", {"username": self.username})
+                
+                # Start receiver thread if it's not alive
+                if self._receive_thread is None or not self._receive_thread.is_alive():
+                    self._receive_thread = threading.Thread(target=self._receive_messages, daemon=True)
+                    self._receive_thread.start()
 
+                # Wait for EITHER an acknowledgement OR a redirect signal
+                # The receiver thread will set one of these events.
+                self.connection_acknowledged.wait(timeout=5.0) 
+
+                if self.redirect_in_progress.is_set():
+                    # Redirect was handled by the receiver thread, which has updated the index.
+                    # The loop will now try the correct server.
+                    continue
+                
+                if self.connection_acknowledged.is_set():
+                    self.is_connected = True
+                    print(f"\n[System] Welcome! You are connected as '{self.username}'.")
+                else:
+                    # Timeout waiting for ack and no redirect occurred. Try next server.
+                    self.is_connected = False
+                    self.sock.close() 
+                    self.current_server_index = (self.current_server_index + 1) % len(DEFAULT_SERVER_CONFIGS)
+
+            except (socket.timeout, ConnectionRefusedError, OSError):
+                self.current_server_index = (self.current_server_index + 1) % len(DEFAULT_SERVER_CONFIGS)
+                # No print statement here, just try the next server silently.
+    
     def _receive_messages(self):
         """Listen for incoming messages from the server."""
         while self._running:
             try:
-                data = self.sock.recv(4096)
-                if not data:
-                    logging.warning("Connection lost.")
-                    self.is_connected = False
+                # Set a timeout on recv so the loop can check self._running periodically
+                # This makes shutdown cleaner.
+                if self.sock:
+                    self.sock.settimeout(1.0) 
+                    data = self.sock.recv(4096)
+                else:
                     break
+
+                if not data:
+                    break # Connection closed by the server
                 
                 message = json.loads(data.decode())
                 self._handle_server_message(message)
 
-            except (json.JSONDecodeError, UnicodeDecodeError):
-                logging.warning("Received malformed message.")
-            except Exception:
-                logging.error("An error occurred while receiving messages.")
-                self.is_connected = False
+            except socket.timeout:
+                continue # Allows the while self._running check to run
+            except (socket.error, ConnectionResetError, BrokenPipeError, json.JSONDecodeError):
+                # Any of these errors mean the connection is broken.
+                # We break the loop silently and let the main loop handle it.
                 break
         
-        if self._running: # If the loop broke unexpectedly
-            logging.info("Attempting to reconnect...")
-            self.connect()
+        # If the connection breaks for any reason, signal the connect() loop to wake up
+        # and reset the client's application state.
+        self.connection_acknowledged.set()
+        self.is_connected = False
+        self.in_room = False
+        self.current_room = None
 
     def _handle_server_message(self, message: dict):
         """Process and display messages from the server."""
@@ -82,33 +134,36 @@ class SyncNetClient:
         payload = message.get("payload")
 
         with self.prompt_lock:
-            # Erase the current input line
+            # Erase the current input line to print the message cleanly
             sys.stdout.write('\r' + ' ' * 60 + '\r')
 
             if msg_type == "redirect":
+                # Handle redirect by updating the server index and closing the connection.
+                # This will interrupt the connect() method and cause it to retry with the new index.
                 leader_id = payload.get("leader_id")
-                logging.info(f"Received redirect to leader: {leader_id}. Reconnecting...")
-                # Find the index of the leader to connect next
                 for i, config in enumerate(DEFAULT_SERVER_CONFIGS):
                     if config.server_id == leader_id:
                         self.current_server_index = i
                         break
-                self.is_connected = False # Trigger reconnect in the receive loop
+                self.redirect_in_progress.set() # Signal that a redirect happened
+                self.is_connected = False
+                if self.sock:
+                    self.sock.close() # This is the key change to unblock the main thread
+            elif msg_type == "ack" and payload.get("command") == "set_username":
+                self.connection_acknowledged.set()
             elif msg_type == "room_joined":
                 self.in_room = True
                 self.current_room = payload.get("room_name")
                 print(f"[System]: {payload.get('message')}")
-                self.state_change_event.set() # Signal that state has changed
+                self.state_change_event.set()
             elif msg_type == "room_left":
                 self.in_room = False
                 self.current_room = None
                 print(f"[System]: {payload.get('message')}")
-                self.state_change_event.set() # Signal that state has changed
+                self.state_change_event.set()
             elif msg_type == "chat":
-                sender = payload.get('sender', 'Unknown')
-                # Shorten sender ID for display
-                sender_short = sender.split(':')[1] if ':' in sender else sender
-                print(f"[{self.current_room}] {sender_short}: {payload.get('message')}")
+                sender = payload.get('sender_name', 'Unknown')
+                print(f"[{self.current_room}] {sender}: {payload.get('message')}")
             elif msg_type == "room_list":
                 print("Available rooms: " + (", ".join(payload) if payload else "None"))
             elif msg_type == "error":
@@ -116,39 +171,25 @@ class SyncNetClient:
             elif msg_type == "info":
                  print(f"[Info]: {payload}")
             else:
-                print(f"[Server]: {payload}")
+                # Silently ignore other message types for a cleaner UI
+                pass
             
             # Reprint the input prompt
-            if self.in_room:
-                prompt = f"[{self.current_room}]> "
-            else:
-                prompt = "> "
+            prompt = f"[{self.current_room}]> " if self.in_room else "> "
             sys.stdout.write(prompt)
             sys.stdout.flush()
 
     def send_command(self, command: str, payload: dict = None):
         """Send a command to the server."""
-        if not self.is_connected:
-            logging.error("Not connected to any server.")
-            return
-        
+        if not self.sock:
+             return
+
         try:
             message = {"command": command, "payload": payload or {}}
             self.sock.sendall(json.dumps(message).encode())
-        except Exception as e:
-            logging.error(f"Failed to send command: {e}")
+        except (socket.error, BrokenPipeError):
             self.is_connected = False
-
-    def start(self):
-        """Start the main client loop and manage menus."""
-        self.connect()
         
-        while self._running:
-            if self.in_room:
-                self.room_menu()
-            else:
-                self.main_menu()
-
     def main_menu(self):
         """Display and handle the main menu."""
         print("\n--- SyncNet Main Menu ---")
@@ -166,14 +207,16 @@ class SyncNetClient:
                 if len(parts) > 1:
                     self.state_change_event.clear()
                     self.send_command("create_room", {"room_name": parts[1]})
-                    self.state_change_event.wait(timeout=2.0) # Wait for confirmation
+                    if not self.state_change_event.wait(timeout=2.0): # Wait for confirmation
+                        print("[System] Server did not confirm room creation in time.")
                 else:
                     print("Usage: Create <room_name>")
             elif command == "join":
                  if len(parts) > 1:
                     self.state_change_event.clear()
                     self.send_command("join_room", {"room_name": parts[1]})
-                    self.state_change_event.wait(timeout=2.0) # Wait for confirmation
+                    if not self.state_change_event.wait(timeout=2.0): # Wait for confirmation
+                        print("[System] Server did not confirm room join in time.")
                  else:
                     print("Usage: Join <room_name>")
             elif command == "list":
@@ -188,6 +231,9 @@ class SyncNetClient:
 
     def room_menu(self):
         """Display and handle the in-room menu."""
+        print("\n--- SyncNet Room Menu ---")
+        print("Commands: Chat <message>, Leave, WhereAmI, Exit")
+        
         prompt = f"[{self.current_room}]> "
         try:
             user_input = input(prompt).strip()
@@ -205,7 +251,8 @@ class SyncNetClient:
             elif command == "leave":
                 self.state_change_event.clear()
                 self.send_command("leave_room")
-                self.state_change_event.wait(timeout=2.0) # Wait for confirmation
+                if not self.state_change_event.wait(timeout=2.0): # Wait for confirmation
+                    print("[System] Server did not confirm leaving room in time.")
             elif command == "whereami":
                 self.send_command("whereami")
             elif command == "exit":
@@ -221,9 +268,22 @@ class SyncNetClient:
         print("\nExiting...")
         self._running = False
         if self.sock:
+            # Shutdown the socket to unblock the receiver thread
+            try:
+                self.sock.shutdown(socket.SHUT_RDWR)
+            except OSError:
+                pass # Socket might already be closed
             self.sock.close()
+        
+        # Wait briefly for the receiver thread to exit
+        if self._receive_thread and self._receive_thread.is_alive():
+            self._receive_thread.join(timeout=1.0)
+            
         sys.exit(0)
 
 if __name__ == "__main__":
     client = SyncNetClient()
-    client.start() 
+    try:
+        client.start()
+    except (KeyboardInterrupt, EOFError):
+        client.stop()

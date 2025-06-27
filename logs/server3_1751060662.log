@@ -1,0 +1,24 @@
+2025-06-27 17:44:22,627 - main - INFO - Starting SyncNet v5 Server: server3
+2025-06-27 17:44:22,627 - heartbeat.server3 - INFO - Heartbeat monitor initialized
+2025-06-27 17:44:22,628 - server.server3 - INFO - SyncNet server initialized
+2025-06-27 17:44:22,628 - server.server3 - INFO - Server state changed to: STARTING
+2025-06-27 17:44:22,631 - server.server3 - INFO - TCP listening on 8002, UDP on 8022
+2025-06-27 17:44:22,633 - heartbeat.server3 - INFO - Heartbeat monitoring started
+2025-06-27 17:44:22,633 - server.server3 - INFO - Server state changed to: RUNNING
+2025-06-27 17:44:22,634 - server.server3 - INFO - Server started successfully on TCP:8002
+2025-06-27 17:44:27,634 - server.server3 - WARNING - Leader is down or not established. Starting election.
+2025-06-27 17:44:27,634 - server.server3 - INFO - Election result: server3 is the new leader.
+2025-06-27 17:44:27,634 - server.server3 - INFO - I am now the leader!
+2025-06-27 17:44:36,647 - server.server3 - INFO - New client connection from ('127.0.0.1', 59340)
+2025-06-27 17:44:36,647 - server.server3 - INFO - Client 127.0.0.1:59340 connected to leader.
+2025-06-27 17:44:48,311 - server.server3 - INFO - New client connection from ('127.0.0.1', 59342)
+2025-06-27 17:44:48,313 - server.server3 - INFO - Client 127.0.0.1:59342 connected to leader.
+2025-06-27 17:44:51,571 - server.server3 - WARNING - Client 127.0.0.1:59342 did not send username first. Disconnecting.
+2025-06-27 17:44:55,584 - server.server3 - INFO - New client connection from ('127.0.0.1', 59343)
+2025-06-27 17:44:55,585 - server.server3 - INFO - Client 127.0.0.1:59343 connected to leader.
+2025-06-27 17:45:00,417 - server.server3 - WARNING - Client 127.0.0.1:59343 did not send username first. Disconnecting.
+2025-06-27 17:45:04,426 - server.server3 - INFO - New client connection from ('127.0.0.1', 59344)
+2025-06-27 17:45:04,427 - server.server3 - INFO - Client 127.0.0.1:59344 connected to leader.
+2025-06-27 17:45:06,512 - server.server3 - WARNING - Client 127.0.0.1:59340 did not send username first. Disconnecting.
+2025-06-27 17:45:10,515 - server.server3 - INFO - New client connection from ('127.0.0.1', 59348)
+2025-06-27 17:45:10,515 - server.server3 - INFO - Client 127.0.0.1:59348 connected to leader.

@@ -43,6 +43,7 @@ class SyncNetServer:
         # Chat room state
         self.chat_rooms: Dict[str, set] = {} # room_name -> set of client_ids
         self.client_to_room: Dict[str, str] = {} # client_id -> room_name
+        self.client_identities: Dict[str, dict] = {} # client_id -> {"username": "name"}
 
         self._lock = threading.RLock()
         self._main_thread: Optional[threading.Thread] = None
@@ -297,7 +298,9 @@ class SyncNetServer:
         # --- From this point on, we are the leader ---
         self.client_connections[client_id] = client_socket
         self.logger.info(f"Client {client_id} connected to leader.")
-
+        
+        has_identity = False
+        
         try:
             while self._running:
                 data = client_socket.recv(NETWORK_CONSTANTS['buffer_size'])
@@ -308,8 +311,17 @@ class SyncNetServer:
                 command = request.get("command")
                 payload = request.get("payload")
 
-                self.logger.debug(f"Leader received command '{command}' from {client_id}")
-                self._handle_client_command(client_id, command, payload)
+                if not has_identity:
+                    if command == "set_username":
+                        self._handle_set_username(client_id, payload)
+                        has_identity = True
+                    else:
+                        # Ignore other commands until identity is established
+                        self.logger.warning(f"Client {client_id} sent command '{command}' before setting username. Ignoring.")
+                        continue
+                else:
+                    self.logger.debug(f"Leader received command '{command}' from {client_id}")
+                    self._handle_client_command(client_id, command, payload)
 
         except (ConnectionResetError, BrokenPipeError, json.JSONDecodeError):
             self.logger.info(f"Client {client_id} disconnected.")
@@ -322,6 +334,7 @@ class SyncNetServer:
     def _handle_client_command(self, client_id: str, command: str, payload: dict):
         """Process a command from a client. Must be run on the leader."""
         handler_map = {
+            "set_username": self._handle_set_username,
             "create_room": self._handle_create_room,
             "join_room": self._handle_join_room,
             "list_rooms": self._handle_list_rooms,
@@ -332,9 +345,25 @@ class SyncNetServer:
         
         handler = handler_map.get(command)
         if handler:
+            # Prevent clients from setting username more than once
+            if command == "set_username":
+                return self._send_to_client(client_id, {"type": "error", "payload": "Username is already set."})
             handler(client_id, payload)
         else:
             self._send_to_client(client_id, {"type": "error", "payload": f"Unknown command: {command}"})
+
+    def _handle_set_username(self, client_id: str, payload: dict):
+        username = payload.get("username", "Anonymous")
+        with self._lock:
+            # Do not allow changing username
+            if client_id in self.client_identities:
+                return
+            self.client_identities[client_id] = {"username": username}
+            self._replicate_state("set_identity", {"client_id": client_id, "identity": self.client_identities[client_id]})
+        
+        self.logger.info(f"Client {client_id} set username to '{username}'")
+        # Acknowledge that the username has been set
+        self._send_to_client(client_id, {"type": "ack", "payload": {"command": "set_username"}})
 
     def _handle_create_room(self, client_id: str, payload: dict):
         room_name = payload.get("room_name")
@@ -392,7 +421,9 @@ class SyncNetServer:
             if not room_name:
                 return self._send_to_client(client_id, {"type": "error", "payload": "You are not in a room."})
 
-            chat_message = {"type": "chat", "payload": {"sender": client_id, "message": message}}
+            sender_name = self.client_identities.get(client_id, {}).get("username", "Unknown")
+            chat_message = {"type": "chat", "payload": {"sender_name": sender_name, "message": message}}
+            
             # Broadcast to everyone in the room except the sender
             for member_id in self.chat_rooms.get(room_name, set()):
                 if member_id != client_id:
@@ -408,6 +439,8 @@ class SyncNetServer:
         with self._lock:
             if client_id in self.client_connections:
                 self.client_connections.pop(client_id).close()
+            
+            self.client_identities.pop(client_id, None)
 
             room_name = self.client_to_room.pop(client_id, None)
             if room_name and room_name in self.chat_rooms:
@@ -479,6 +512,9 @@ class SyncNetServer:
                     self.chat_rooms[room_name].discard(client_id)
                 if client_id in self.client_to_room:
                     del self.client_to_room[client_id]
+            elif action == "set_identity":
+                identity = data.get("identity")
+                self.client_identities[client_id] = identity
 
     def get_server_status(self) -> Dict[str, Any]:
         """Get comprehensive server status."""

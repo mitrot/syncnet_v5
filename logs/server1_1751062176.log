@@ -1,0 +1,16 @@
+2025-06-27 18:09:36,351 - main - INFO - Starting SyncNet v5 Server: server1
+2025-06-27 18:09:36,351 - heartbeat.server1 - INFO - Heartbeat monitor initialized
+2025-06-27 18:09:36,351 - server.server1 - INFO - SyncNet server initialized
+2025-06-27 18:09:36,351 - server.server1 - INFO - Server state changed to: STARTING
+2025-06-27 18:09:36,356 - server.server1 - INFO - TCP listening on 8000, UDP on 8020
+2025-06-27 18:09:36,358 - heartbeat.server1 - INFO - Heartbeat monitoring started
+2025-06-27 18:09:36,358 - server.server1 - INFO - Server state changed to: RUNNING
+2025-06-27 18:09:36,358 - server.server1 - INFO - Server started successfully on TCP:8000
+2025-06-27 18:09:41,358 - server.server1 - WARNING - Leader is down or not established. Starting election.
+2025-06-27 18:09:41,358 - server.server1 - INFO - Election result: server3 is the new leader.
+2025-06-27 18:09:54,180 - server.server1 - INFO - New client connection from ('127.0.0.1', 64762)
+2025-06-27 18:09:54,180 - server.server1 - INFO - Redirected client to leader: server3
+2025-06-27 18:09:58,458 - server.server1 - INFO - New client connection from ('127.0.0.1', 64764)
+2025-06-27 18:09:58,458 - server.server1 - INFO - Redirected client to leader: server3
+2025-06-27 18:10:06,100 - server.server1 - INFO - New client connection from ('127.0.0.1', 64770)
+2025-06-27 18:10:06,100 - server.server1 - INFO - Redirected client to leader: server3
