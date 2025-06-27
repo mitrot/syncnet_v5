@@ -7,15 +7,12 @@ import socket
 import json
 import signal
 import sys
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass
+from typing import Dict, List, Optional, Any
 from enum import Enum
+import traceback
 
 from common.config import DEFAULT_SERVER_CONFIGS, TIMEOUTS, NETWORK_CONSTANTS
-from common.messages import Message, MessageType, LamportClock
-from server.storage import MessageStorage
-from server.election import LCRElection, ElectionState, ElectionMessage
-from server.heartbeat import HeartbeatMonitor, ServerStatus
+from server.heartbeat import HeartbeatMonitor
 
 class ServerState(Enum):
     """Server operational states"""
@@ -25,720 +22,305 @@ class ServerState(Enum):
     STOPPING = "stopping"
     ERROR = "error"
 
-@dataclass
-class ClientConnection:
-    """Information about connected clients"""
-    client_id: str
-    socket: socket.socket
-    last_seen: float
-    username: Optional[str] = None
-
 class SyncNetServer:
-    """Main SyncNet v5 distributed chat server"""
+    """Main SyncNet v5 distributed chat server with simplified election."""
     
     def __init__(self, server_id: str):
-        # Validate server_id
-        valid_servers = {config.server_id for config in DEFAULT_SERVER_CONFIGS}
-        if server_id not in valid_servers:
-            raise ValueError(f"Invalid server_id: {server_id}. Must be one of: {valid_servers}")
-        
         self.server_id = server_id
-        self.server_config = next(config for config in DEFAULT_SERVER_CONFIGS if config.server_id == server_id)
+        self.server_config = next(c for c in DEFAULT_SERVER_CONFIGS if c.server_id == server_id)
         
-        # Server state
-        self.state = ServerState.STOPPED
+        self._state = ServerState.STOPPED
         self.start_time = None
-        self.lamport_clock = LamportClock()
+        self.current_leader: Optional[str] = None
+        self.is_leader = False
         
-        # Core components
-        self.storage = MessageStorage(server_id)
-        self.election = LCRElection(server_id, self.server_config.ring_position)
         self.heartbeat = HeartbeatMonitor(self.server_id)
         
-        # Network components
-        self.tcp_server_socket = None
-        self.udp_heartbeat_socket = None
-        self.udp_election_socket = None  # New socket for election messages
-        self.client_connections: Dict[str, ClientConnection] = {}
+        self.tcp_server_socket: Optional[socket.socket] = None
+        self.udp_server_socket: Optional[socket.socket] = None
+        self.client_connections: Dict[str, Any] = {}
         
-        # Threading
         self._lock = threading.RLock()
-        self._running = False
-        self._tcp_thread = None
-        self._udp_thread = None
-        self._udp_election_thread = None
-        self._client_handler_threads = []
+        self._main_thread: Optional[threading.Thread] = None
+        self._threads: List[threading.Thread] = []
+        self._startup_event = threading.Event()
         
-        # Message queues and handlers
-        self.message_queue = asyncio.Queue()
-        self.pending_elections = {}
-        
-        # Statistics
-        self.messages_processed = 0
-        self.clients_served = 0
-        self.elections_participated = 0
-        
-        # Logging
         self.logger = logging.getLogger(f'server.{server_id}')
-        
-        # Setup heartbeat integration with election
-        self.heartbeat.add_failure_callback(self._on_server_failure)
-        self.heartbeat.add_recovery_callback(self._on_server_recovery)
-        
-        self.logger.info(f"SyncNet server {server_id} initialized")
+        self.logger.info("SyncNet server initialized")
     
-    def start(self) -> bool:
-        """Start the SyncNet server"""
+    @property
+    def state(self) -> str:
+        """Get the current server state."""
+        return self._state.value
+
+    @state.setter
+    def state(self, new_state: ServerState):
+        """Set the server state and log changes."""
+        if not isinstance(new_state, ServerState):
+            raise TypeError("State must be a ServerState enum member.")
+        
+        if hasattr(self, '_state') and self._state == new_state:
+            return
+            
+        self._state = new_state
+        self.logger.info(f"Server state changed to: {new_state.name}")
+
+    def start(self):
+        """Start the SyncNet server and wait for it to be running."""
+        if self._state != ServerState.STOPPED:
+            self.logger.warning("Server is not stopped, cannot start.")
+            return
+
+        self.state = ServerState.STARTING
+        self._startup_event.clear()
+        
+        self._main_thread = threading.Thread(target=self._run, daemon=True)
+        self._main_thread.start()
+        
+        # Wait for the _run loop to signal that it's ready
+        started = self._startup_event.wait(timeout=5.0)
+        if not started:
+            self.logger.error("Server failed to start within the timeout.")
+            self.stop()
+            self.state = ServerState.ERROR
+            
+    def _run(self):
+        """The main execution loop of the server, run in a separate thread."""
         try:
-            self.state = ServerState.STARTING
             self.start_time = time.time()
+            self._running = True
             
-            self.logger.info(f"Starting SyncNet server {self.server_id}")
+            self._setup_sockets()
             
-            # Initialize components
-            self.storage = MessageStorage(f'data/{self.server_id}_messages.db')
-            self.election = LCRElection(self.server_id, self.server_config.ring_position)
-            self.heartbeat = HeartbeatMonitor(self.server_id)
+            self._start_thread(target=self._tcp_accept_loop)
+            self._start_thread(target=self._udp_listen_loop)
+            self._start_thread(target=self._monitor_cluster)
+
+            self.heartbeat.start()
             
-            # Add heartbeat callbacks
-            self.heartbeat.add_failure_callback(self._on_server_failure)
-            self.heartbeat.add_recovery_callback(self._on_server_recovery)
-            
-            # Setup network
-            self._setup_tcp_server()
-            self._setup_udp_server()
-            
-            # Set state to RUNNING before starting threads
             self.state = ServerState.RUNNING
-            
-            # Start network services
-            self._start_network_threads()
-            
-            # Start heartbeat monitoring
-            self.heartbeat.start_monitoring()
-            
-            # Auto-start election after a brief delay to allow other servers to start
-            def delayed_election():
-                time.sleep(8)  # Wait 8 seconds for other servers to come online and establish heartbeats
-                if self.state == ServerState.RUNNING:
-                    self.logger.info("Starting automatic leader election")
-                    self.start_election_process()
-            
-            election_thread = threading.Thread(target=delayed_election, daemon=True)
-            election_thread.start()
-            
-            self.logger.info(f"Server {self.server_id} started successfully on TCP:{self.server_config.tcp_port}")
-            
-            return True
+            self._startup_event.set() # Signal that startup is complete
+            self.logger.info(f"Server started successfully on TCP:{self.server_config.tcp_port}")
+
+            # Keep this thread alive as long as the server is running
+            while self._running:
+                time.sleep(0.5)
             
         except Exception as e:
-            self.logger.error(f"Failed to start server: {e}")
+            self.logger.error(f"Server runtime error: {e}\n{traceback.format_exc()}")
             self.state = ServerState.ERROR
-            self._cleanup()
-            return False
-    
-    def stop(self) -> bool:
-        """Stop the server gracefully"""
-        with self._lock:
-            if self.state not in [ServerState.RUNNING, ServerState.ERROR]:
-                return True
+            self._startup_event.set() # Ensure start() doesn't hang on failure
+        finally:
+            # When the loop exits, ensure a clean shutdown
+            self._shutdown_components()
+
+    def stop(self):
+        """Stop the server gracefully."""
+        if self._state == ServerState.STOPPING or self._state == ServerState.STOPPED:
+            return
             
-            self.state = ServerState.STOPPING
-            self.logger.info(f"Stopping SyncNet server {self.server_id}...")
-            
-            try:
-                # Stop accepting new connections
-                self._running = False
-                
-                # Stop heartbeat monitoring
-                self.heartbeat.stop_monitoring()
-                
-                # Close all client connections
-                self._close_all_clients()
-                
-                # Stop network threads
-                self._stop_network_threads()
-                
-                # Close sockets
-                self._close_sockets()
-                
-                # Close storage
-                self.storage.close()
-                
-                self.state = ServerState.STOPPED
-                
-                uptime = time.time() - self.start_time if self.start_time else 0
-                self.logger.info(f"✋ SyncNet server {self.server_id} stopped after {uptime:.1f}s")
-                return True
-                
-            except Exception as e:
-                self.logger.error(f"Error during server shutdown: {e}")
-                self.state = ServerState.ERROR
-                return False
-    
-    def _setup_tcp_server(self):
-        """Setup TCP server socket for client connections"""
+        self.state = ServerState.STOPPING
+        self.logger.info("Stopping SyncNet server...")
+        
+        self._running = False
+        
+        # Wait for the main thread to finish
+        if self._main_thread and self._main_thread.is_alive():
+            self._main_thread.join(timeout=2.0)
+        
+        # The _shutdown_components logic is now called from the _run loop's finally block.
+        
+        self.state = ServerState.STOPPED
+        uptime = time.time() - self.start_time if self.start_time else 0
+        self.logger.info(f"SyncNet server stopped after {uptime:.1f}s")
+
+    def _shutdown_components(self):
+        """Internal method to shut down all running components."""
+        self.heartbeat.stop()
+        self._close_sockets()
+        
+        for thread in self._threads:
+            if thread.is_alive():
+                # Threads are daemons, so we don't strictly need to join
+                # but it's good practice if they hold resources.
+                thread.join(timeout=1.0)
+
+    def _setup_sockets(self):
+        """Initialize TCP and UDP sockets."""
         self.tcp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.tcp_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         self.tcp_server_socket.bind((self.server_config.host, self.server_config.tcp_port))
         self.tcp_server_socket.listen(NETWORK_CONSTANTS['max_connections'])
-        self.tcp_server_socket.settimeout(1.0)  # Non-blocking with timeout
+        self.tcp_server_socket.settimeout(1.0)
         
-        self.logger.info(f"TCP server listening on {self.server_config.host}:{self.server_config.tcp_port}")
-    
-    def _setup_udp_server(self):
-        """Setup UDP server sockets for heartbeats and elections"""
-        # Heartbeat socket
-        self.udp_heartbeat_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp_heartbeat_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.udp_heartbeat_socket.bind((self.server_config.host, self.server_config.heartbeat_port))
-        self.udp_heartbeat_socket.settimeout(1.0)  # Non-blocking with timeout
+        self.udp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.udp_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.udp_server_socket.bind((self.server_config.host, self.server_config.heartbeat_port))
+        self.udp_server_socket.settimeout(1.0)
         
-        # Election socket
-        self.udp_election_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
-        self.udp_election_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.udp_election_socket.bind((self.server_config.host, self.server_config.election_port))
-        self.udp_election_socket.settimeout(1.0)  # Non-blocking with timeout
-        
-        self.logger.info(f"UDP heartbeat listening on {self.server_config.host}:{self.server_config.heartbeat_port}")
-        self.logger.info(f"UDP election listening on {self.server_config.host}:{self.server_config.election_port}")
-    
-    def _start_network_threads(self):
-        """Start network handling threads"""
-        # TCP connection handler
-        self._tcp_thread = threading.Thread(
-            target=self._tcp_server_loop,
-            name=f"tcp-server-{self.server_id}",
-            daemon=True
-        )
-        self._tcp_thread.start()
-        
-        # UDP heartbeat handler
-        self._udp_thread = threading.Thread(
-            target=self._udp_server_loop,
-            name=f"udp-server-{self.server_id}",
-            daemon=True
-        )
-        self._udp_thread.start()
-        
-        # UDP election handler
-        self._udp_election_thread = threading.Thread(
-            target=self._udp_election_loop,
-            name=f"udp-election-{self.server_id}",
-            daemon=True
-        )
-        self._udp_election_thread.start()
-    
-    def _tcp_server_loop(self):
-        """Main TCP server loop"""
-        self.logger.info(f"TCP server listening on {self.server_config.host}:{self.server_config.tcp_port}")
-        
-        try: 
-            while self.state == ServerState.RUNNING:
-                try:
-                    client_socket, address = self.tcp_server_socket.accept()
-                    
-                    # Handle status check connections (quick connect/disconnect)
-                    # If it's a status check, send status immediately
-                    client_socket.settimeout(1.0)
-                    try:
-                        data = client_socket.recv(1024)
-                        if data:
-                            try:
-                                request = json.loads(data.decode())
-                                if request.get('type') == 'status':
-                                    # Send status response immediately
-                                    status = self.get_server_status()
-                                    response = json.dumps(status).encode()
-                                    client_socket.send(response)
-                                    client_socket.close()
-                                    continue
-                            except (json.JSONDecodeError, UnicodeDecodeError):
-                                pass
-                    except socket.timeout:
-                        pass
-                    
-                    # Regular client connection
-                    client_socket.settimeout(None)  # Remove timeout for regular clients
-                    client_id = f"client_{int(time.time())}_{address[1]}"
-                    
-                    with self._lock:
-                        self.client_connections[client_id] = ClientConnection(
-                            client_id=client_id,
-                            socket=client_socket,
-                            last_seen=time.time()
-                        )
-                    
-                    # Start client handler thread
-                    client_thread = threading.Thread(
-                        target=self._handle_client,
-                        args=(client_id, client_socket),
-                        daemon=True
-                    )
-                    client_thread.start()
-                    self._client_handler_threads.append(client_thread)
-                    
-                    self.logger.info(f"New client connection: {client_id} from {address}")
-                    
-                except socket.timeout:
-                    # Normal timeout - don't log this as it's expected behavior
-                    continue
-                except socket.error as e:
-                    if self.state == ServerState.RUNNING:
-                        self.logger.error(f"TCP server error: {e}")
-                        
-        except Exception as e:
-            if self.state == ServerState.RUNNING:
-                self.logger.error(f"TCP server loop error: {e}")
-        finally:
-            self.logger.info("TCP server loop ended")
-    
-    def _udp_server_loop(self):
-        """Main UDP server loop for heartbeats and inter-server communication"""
-        self.logger.info("UDP server thread started")
-        
-        while self.state == ServerState.RUNNING:
-            try:
-                data, address = self.udp_heartbeat_socket.recvfrom(NETWORK_CONSTANTS['max_message_size'])
-                
-                try:
-                    message = json.loads(data.decode())
-                    self._handle_udp_message(message, address)
-                except json.JSONDecodeError:
-                    self.logger.warning(f"Invalid JSON from {address}: {data[:100]}")
-                
-            except socket.timeout:
-                continue  # Normal timeout, check if still running
-            except Exception as e:
-                if self.state == ServerState.RUNNING:
-                    self.logger.error(f"Error in UDP server loop: {e}")
-                    time.sleep(0.1)
-        
-        self.logger.info("UDP server thread stopped")
-    
-    def _handle_client(self, client_id: str, client_socket: socket.socket):
-        """Handle individual client connection"""
-        self.logger.debug(f"Client handler started for {client_id}")
-        
-        try:
-            client_socket.settimeout(TIMEOUTS['socket_timeout'])
-            
-            while self.state == ServerState.RUNNING and client_id in self.client_connections:
-                try:
-                    # Receive message from client
-                    data = client_socket.recv(NETWORK_CONSTANTS['max_message_size'])
-                    if not data:
-                        break  # Client disconnected
-                    
-                    try:
-                        message_data = json.loads(data.decode())
-                        self._handle_client_message(client_id, message_data)
-                        
-                        # Update last seen time
-                        with self._lock:
-                            if client_id in self.client_connections:
-                                self.client_connections[client_id].last_seen = time.time()
-                        
-                    except json.JSONDecodeError:
-                        self.logger.warning(f"Invalid JSON from client {client_id}")
-                        
-                except socket.timeout:
-                    continue  # Normal timeout
-                except ConnectionResetError:
-                    break  # Client disconnected
-                    
-        except Exception as e:
-            self.logger.error(f"Error handling client {client_id}: {e}")
-        finally:
-            self._disconnect_client(client_id)
-        
-        self.logger.debug(f"Client handler stopped for {client_id}")
-    
-    def _handle_client_message(self, client_id: str, message_data: Dict):
-        """Handle incoming message from client"""
-        try:
-            message_type = message_data.get('type')
-            
-            if message_type == 'chat':
-                self._handle_chat_message(client_id, message_data)
-            elif message_type == 'join':
-                self._handle_join_message(client_id, message_data)
-            elif message_type == 'status':
-                self._handle_status_request(client_id)
-            elif message_type == 'ping':
-                # Respond to ping with pong
-                pong_msg = {'type': 'pong', 'timestamp': time.time()}
-                self._send_to_client(client_id, pong_msg)
-            else:
-                self.logger.warning(f"Unknown message type from {client_id}: {message_type}")
-                
-        except Exception as e:
-            self.logger.error(f"Error handling client message: {e}")
-    
-    def _handle_chat_message(self, client_id: str, message_data: Dict):
-        """Handle chat message from client"""
-        content = message_data.get('content', '')
-        username = message_data.get('username', 'Anonymous')
-        
-        # Create message with Lamport timestamp
-        timestamp = self.lamport_clock.tick()
-        
-        message = Message(
-            msg_type=MessageType.CHAT,
-            sender_id=self.server_id,
-            data={
-                'content': content,
-                'client_id': client_id,
-                'username': username,
-                'server_timestamp': time.time()
-            },
-            lamport_timestamp=timestamp
-        )
-        
-        # Store in database
-        message_id = self.storage.store_message(message)
-        
-        # Broadcast to all connected clients
-        self._broadcast_to_clients({
-            'type': 'chat',
-            'message_id': message_id,
-            'content': content,
-            'username': username,
-            'timestamp': timestamp,
-            'server_id': self.server_id
-        })
-        
-        self.messages_processed += 1
-        self.logger.debug(f"Processed chat message from {username} via {client_id}")
-    
-    def _handle_join_message(self, client_id: str, message_data: Dict):
-        """Handle client join message"""
-        username = message_data.get('username', 'Anonymous')
-        
-        with self._lock:
-            if client_id in self.client_connections:
-                self.client_connections[client_id].username = username
-        
-        # Send welcome message
-        welcome_data = {
-            'type': 'welcome',
-            'server_id': self.server_id,
-            'is_leader': self.election.is_leader(),
-            'timestamp': self.lamport_clock.tick()
-        }
-        
-        self._send_to_client(client_id, welcome_data)
-        
-        # Broadcast join notification
-        self._broadcast_to_clients({
-            'type': 'user_joined',
-            'username': username,
-            'server_id': self.server_id,
-            'timestamp': self.lamport_clock.tick()
-        })
-        
-        self.logger.info(f"User {username} joined via {client_id}")
-    
-    def _handle_status_request(self, client_id: str):
-        """Handle status request from client or monitoring"""
-        try:
-            status = self.get_server_status()
-            status_message = {
-                'type': 'status_response',
-                'timestamp': time.time(),
-                'server_status': status
-            }
-            
-            # Send response back to client
-            if client_id in self.client_connections:
-                self._send_to_client(client_id, status_message)
-            
-        except Exception as e:
-            self.logger.error(f"Error handling status request: {e}")
-    
-    def _handle_udp_message(self, message: Dict, address: Tuple[str, int]):
-        """Handle UDP message (heartbeats only - elections use dedicated socket)"""
-        message_type = message.get('type')
-        
-        if message_type == 'heartbeat':
-            sender_id = message.get('sender_id')
-            if sender_id:
-                self.heartbeat.receive_heartbeat(sender_id, message)
-        elif message_type == 'election':
-            # Elections should now go to the dedicated election port
-            self.logger.warning(f"Election message received on heartbeat port from {address} - should use election port")
-        else:
-            self.logger.debug(f"Unknown UDP message type: {message_type}")
-    
-    def _handle_election_message(self, message: Dict, address: Tuple[str, int]):
-        """Handle election-related messages"""
-        try:
-            # Parse election message
-            election_msg = ElectionMessage(
-                election_id=message.get('election_id'),
-                candidate_id=message.get('candidate_id'),
-                candidate_position=message.get('candidate_position', 0),
-                message_type=message.get('message_type', 'election'),
-                sender_id=message.get('sender_id'),
-                lamport_timestamp=message.get('lamport_timestamp', 0)
-            )
-            
-            # Process with LCR algorithm
-            should_forward, response_msg = self.election.process_election_message(election_msg)
-            
-            if should_forward and response_msg:
-                # Forward message to next server in ring
-                next_server = self.election.get_next_neighbor()
-                self._send_election_message(response_msg, next_server)
-            
-            self.elections_participated += 1
-            self.logger.debug(f"Processed election message: {message.get('message_type')} from {message.get('sender_id')}")
-            
-        except Exception as e:
-            self.logger.error(f"Error processing election message: {e}")
-    
-    def _send_election_message(self, election_msg, target_server_id: str):
-        """Send election message to target server via UDP"""
-        try:
-            # Find target server config
-            target_config = None
-            for config in self.server_config.__class__.__dict__.get('__annotations__', {}):
-                pass  # We'll get config from DEFAULT_SERVER_CONFIGS instead
-            
-            from common.config import DEFAULT_SERVER_CONFIGS
-            target_config = next((config for config in DEFAULT_SERVER_CONFIGS if config.server_id == target_server_id), None)
-            
-            if not target_config:
-                self.logger.error(f"Cannot find config for target server: {target_server_id}")
-                return
-            
-            # Prepare message data
-            message_data = {
-                'type': 'election',
-                'election_id': election_msg.election_id,
-                'candidate_id': election_msg.candidate_id,
-                'candidate_position': election_msg.candidate_position,
-                'message_type': election_msg.message_type,
-                'sender_id': election_msg.sender_id,
-                'lamport_timestamp': election_msg.lamport_timestamp
-            }
-            
-            # Send via UDP to ELECTION PORT (not heartbeat port!)
-            self._send_udp_message(message_data, target_config.host, target_config.election_port)
-            self.logger.debug(f"Sent {election_msg.message_type} message to {target_server_id} on election port {target_config.election_port}")
-            
-        except Exception as e:
-            self.logger.error(f"Failed to send election message to {target_server_id}: {e}")
-    
-    def _send_udp_message(self, message: Dict, host: str, port: int):
-        """Send UDP message to specified host:port"""
-        try:
-            data = json.dumps(message).encode()
-            
-            # Create temporary UDP socket for sending
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as send_socket:
-                send_socket.sendto(data, (host, port))
-                
-        except Exception as e:
-            self.logger.error(f"Failed to send UDP message to {host}:{port}: {e}")
-    
-    def start_election_process(self):
-        """Manually start election process and send initial message"""
-        try:
-            # Sync failed servers with current heartbeat status before starting election
-            self.election.sync_failed_servers_with_heartbeat(self.heartbeat)
-            
-            # Pass heartbeat monitor so retries can also sync
-            election_id = self.election.start_election(self.heartbeat)
-            if election_id:
-                # Create and send initial election message
-                election_msg = self.election.create_election_message("election")
-                next_server = self.election.get_next_neighbor()
-                self._send_election_message(election_msg, next_server)
-                self.logger.info(f"Started election {election_id}, sent to {next_server}")
-                
-        except Exception as e:
-            self.logger.error(f"Failed to start election process: {e}")
-    
-    def _broadcast_to_clients(self, message: Dict):
-        """Broadcast message to all connected clients"""
-        disconnected_clients = []
-        
-        with self._lock:
-            for client_id, conn in self.client_connections.items():
-                try:
-                    self._send_to_client(client_id, message)
-                except Exception as e:
-                    self.logger.warning(f"Failed to send to {client_id}: {e}")
-                    disconnected_clients.append(client_id)
-        
-        # Clean up disconnected clients
-        for client_id in disconnected_clients:
-            self._disconnect_client(client_id)
-    
-    def _send_to_client(self, client_id: str, message: Dict):
-        """Send message to specific client"""
-        with self._lock:
-            if client_id not in self.client_connections:
-                return
-            
-            conn = self.client_connections[client_id]
-            data = json.dumps(message).encode()
-            conn.socket.send(data)
-    
-    def _disconnect_client(self, client_id: str):
-        """Disconnect and clean up client"""
-        with self._lock:
-            if client_id not in self.client_connections:
-                return
-            
-            conn = self.client_connections[client_id]
-            
-            try:
-                conn.socket.close()
-            except:
-                pass
-            
-            username = conn.username or 'Anonymous'
-            del self.client_connections[client_id]
-            
-            self.logger.info(f"Client {client_id} ({username}) disconnected")
-    
-    def _on_server_failure(self, server_id: str):
-        """Handle server failure detected by heartbeat monitor"""
-        self.logger.warning(f"Server failure detected: {server_id}")
-        
-        # Trigger election if failed server was the leader
-        if self.election.get_current_leader() == server_id:
-            self.logger.info("Leader failed, starting new election")
-            self.election.handle_server_failure(server_id)
-    
-    def _on_server_recovery(self, server_id: str):
-        """Handle server recovery detected by heartbeat monitor"""
-        self.logger.info(f"Server recovery detected: {server_id}")
-        
-        # Notify election system of server recovery
-        self.election.handle_server_recovery(server_id)
-    
-    def _close_all_clients(self):
-        """Close all client connections"""
-        with self._lock:
-            for client_id in list(self.client_connections.keys()):
-                self._disconnect_client(client_id)
-    
-    def _stop_network_threads(self):
-        """Stop network threads gracefully"""
-        if self._tcp_thread and self._tcp_thread.is_alive():
-            self._tcp_thread.join(timeout=2.0)
-        
-        if self._udp_thread and self._udp_thread.is_alive():
-            self._udp_thread.join(timeout=2.0)
-        
-        if self._udp_election_thread and self._udp_election_thread.is_alive():
-            self._udp_election_thread.join(timeout=2.0)
-        
-        # Stop client handler threads
-        for thread in self._client_handler_threads:
-            if thread.is_alive():
-                thread.join(timeout=1.0)
-    
-    def _close_sockets(self):
-        """Close network sockets"""
-        if self.tcp_server_socket:
-            try:
-                self.tcp_server_socket.close()
-            except:
-                pass
-        
-        if self.udp_heartbeat_socket:
-            try:
-                self.udp_heartbeat_socket.close()
-            except:
-                pass
-        
-        if self.udp_election_socket:
-            try:
-                self.udp_election_socket.close()
-            except:
-                pass
-    
-    def _cleanup(self):
-        """Cleanup resources after error"""
-        try:
-            self._close_all_clients()
-            self._close_sockets()
-            self.heartbeat.stop_monitoring()
-            self.storage.close()
-        except:
-            pass
-    
-    def is_leader(self) -> bool:
-        """Check if this server is the current leader"""
-        return self.election.is_leader()
-    
-    def get_server_status(self) -> Dict[str, Any]:
-        """Get comprehensive server status"""
-        with self._lock:
-            current_time = time.time()
-            uptime = current_time - self.start_time if self.start_time else 0
-            
-            return {
-                'server_id': self.server_id,
-                'state': self.state.value,
-                'uptime': round(uptime, 1),
-                'is_leader': self.is_leader(),
-                'current_leader': self.election.get_current_leader(),
-                'ring_position': self.server_config.ring_position,
-                'connected_clients': len(self.client_connections),
-                'messages_processed': self.messages_processed,
-                'clients_served': self.clients_served,
-                'elections_participated': self.elections_participated,
-                'lamport_timestamp': self.lamport_clock.timestamp,
-                'network': {
-                    'tcp_port': self.server_config.tcp_port,
-                    'heartbeat_port': self.server_config.heartbeat_port,
-                    'host': self.server_config.host
-                },
-                'storage_stats': self.storage.get_stats(),
-                'heartbeat_stats': self.heartbeat.get_heartbeat_statistics(),
-                'election_status': self.election.get_election_status()
-            }
-    
-    def __enter__(self):
-        """Context manager entry"""
-        self.start()
-        return self
-    
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        """Context manager exit"""
-        self.stop()
+        self.logger.info(f"TCP listening on {self.server_config.tcp_port}, UDP on {self.server_config.heartbeat_port}")
 
-    def _udp_election_loop(self):
-        """Main UDP server loop for election messages"""
-        self.logger.info("UDP election thread started")
-        
-        while self.state == ServerState.RUNNING:
+    def _close_sockets(self):
+        """Close all network sockets."""
+        if self.tcp_server_socket:
+            self.tcp_server_socket.close()
+        if self.udp_server_socket:
+            self.udp_server_socket.close()
+        self.logger.info("Network sockets closed.")
+
+    def _start_thread(self, target, args=()):
+        """Create, start, and store a daemon thread."""
+        thread = threading.Thread(target=target, args=args, daemon=True)
+        thread.start()
+        self._threads.append(thread)
+
+    def _tcp_accept_loop(self):
+        """Accept incoming client TCP connections."""
+        while self._running:
             try:
-                data, address = self.udp_election_socket.recvfrom(NETWORK_CONSTANTS['max_message_size'])
+                client_socket, address = self.tcp_server_socket.accept()
+                self.logger.info(f"New client connection from {address}")
+                self._start_thread(target=self._handle_client, args=(client_socket,))
+            except socket.timeout:
+                continue
+            except Exception as e:
+                if self._running:
+                    self.logger.error(f"TCP accept loop error: {e}")
+
+    def _udp_listen_loop(self):
+        """Listen for and handle incoming UDP messages."""
+        while self._running:
+            try:
+                data, _ = self.udp_server_socket.recvfrom(NETWORK_CONSTANTS['buffer_size'])
+                message = json.loads(data.decode())
                 
-                try:
-                    message = json.loads(data.decode())
-                    # Only handle election messages on the election port
-                    if message.get('type') == 'election':
-                        self._handle_election_message(message, address)
-                    else:
-                        self.logger.warning(f"Non-election message received on election port from {address}: {message.get('type')}")
-                except json.JSONDecodeError:
-                    self.logger.warning(f"Invalid JSON from {address} on election port: {data[:100]}")
+                msg_type = message.get("type")
+                if msg_type == "heartbeat":
+                    self.heartbeat.receive_heartbeat(message)
+                elif msg_type == "leader_announcement":
+                    self._handle_leader_announcement(message)
                 
             except socket.timeout:
-                continue  # Normal timeout, check if still running
+                continue
             except Exception as e:
-                if self.state == ServerState.RUNNING:
-                    self.logger.error(f"Error in UDP election loop: {e}")
-                    time.sleep(0.1)
-        
-        self.logger.info("UDP election thread stopped")
+                if self._running:
+                    self.logger.error(f"UDP listen loop error: {e}")
+    
+    def _monitor_cluster(self):
+        """Periodically check leader status and run elections if needed."""
+        time.sleep(5) # Initial delay to allow cluster to stabilize
+        while self._running:
+            leader_is_alive = self.current_leader and self.current_leader in self.heartbeat.get_active_servers()
+            
+            if not leader_is_alive:
+                self.logger.warning("Leader is down or not established. Starting election.")
+                self._run_election()
+            
+            time.sleep(TIMEOUTS['election_timeout'])
+
+    def _run_election(self):
+        """
+        Run a simplified leader election. The active server with the highest
+        ring position (or lowest server_id as a tie-breaker) becomes the leader.
+        """
+        with self._lock:
+            # Get the single, definitive list of all active servers (including this one)
+            active_servers = self.heartbeat.get_active_servers()
+            
+            if self.server_id not in active_servers:
+                self.logger.warning("Cannot participate in election; this server is not considered active.")
+                self.is_leader = False
+                return
+
+            # Find the server config for all active servers
+            active_server_configs = [
+                config for sid in active_servers
+                for config in DEFAULT_SERVER_CONFIGS if config.server_id == sid
+            ]
+            
+            if not active_server_configs:
+                self.logger.error("Could not run election: no active servers found.")
+                return
+
+            # Determine winner by highest ring position, then lowest server_id
+            winner = sorted(active_server_configs, key=lambda c: (-c.ring_position, c.server_id))[0]
+
+            self.logger.info(f"Election result: {winner.server_id} is the new leader.")
+
+            if winner.server_id == self.server_id:
+                self._become_leader()
+                self._broadcast_udp({
+                    "type": "leader_announcement",
+                    "leader_id": self.server_id
+                })
+            else:
+                self.is_leader = False
+                self.current_leader = winner.server_id
+
+    def _handle_leader_announcement(self, message: Dict):
+        """Handle a leader announcement from another server."""
+        new_leader = message.get("leader_id")
+        if new_leader and new_leader != self.current_leader:
+            with self._lock:
+                self.current_leader = new_leader
+                self.is_leader = (self.server_id == new_leader)
+                self.logger.info(f"New leader elected: {new_leader}. I am {'the leader' if self.is_leader else 'a follower'}.")
+
+    def _become_leader(self):
+        """Set this server as the leader."""
+        with self._lock:
+            if not self.is_leader:
+                self.logger.info("I am now the leader!")
+                self.is_leader = True
+            self.current_leader = self.server_id
+    
+    def _handle_client(self, client_socket: socket.socket):
+        """Handle an individual client connection."""
+        # Simplified client handling
+        try:
+            while self._running:
+                data = client_socket.recv(NETWORK_CONSTANTS['buffer_size'])
+                if not data:
+                    break
+                
+                message = json.loads(data.decode())
+                if self.is_leader:
+                    self.logger.info(f"Leader received message: {message}")
+                    # In a full implementation, leader would process and distribute this.
+                else:
+                    # Forward to leader or reject
+                    client_socket.send(json.dumps({"type": "error", "message": "Not the leader"}).encode())
+
+        except (ConnectionResetError, BrokenPipeError):
+            self.logger.info("Client disconnected.")
+        except Exception as e:
+            if self._running:
+                self.logger.error(f"Client handling error: {e}")
+        finally:
+            client_socket.close()
+
+    def _broadcast_udp(self, message: Dict):
+        """Broadcast a UDP message to all other servers."""
+        try:
+            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                encoded_message = json.dumps(message).encode()
+                for config in DEFAULT_SERVER_CONFIGS:
+                    # Broadcast to heartbeat port
+                    sock.sendto(encoded_message, (config.host, config.heartbeat_port))
+        except Exception as e:
+            self.logger.error(f"Failed to broadcast UDP message: {e}")
+
+    def get_server_status(self) -> Dict[str, Any]:
+        """Get comprehensive server status."""
+        return {
+            'server_id': self.server_id,
+            'state': self.state,
+            'is_leader': self.is_leader,
+            'current_leader': self.current_leader,
+            'active_servers': self.heartbeat.get_active_servers(),
+            'server_statuses': self.heartbeat.get_server_statuses()
+        }
 
 # Signal handler for graceful shutdown
 _server_instance = None
