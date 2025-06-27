@@ -4,6 +4,17 @@ import threading
 import json
 import time
 import os
+from typing import Any
+
+# Use platform-specific non-blocking input
+try:
+    import msvcrt
+    _IS_WINDOWS = True
+except ImportError:
+    import sys
+    import tty
+    import termios
+    _IS_WINDOWS = False
 
 # Robustly add project root to the Python path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -28,6 +39,18 @@ class SyncNetClient:
         self.state_change_event = threading.Event()
         self.connection_acknowledged = threading.Event()
         self.redirect_in_progress = threading.Event()
+        self.last_pong_time = 0
+        self._heartbeat_thread = None
+        self._user_input_buffer = ""
+
+    def _print_help(self):
+        """Prints the available commands based on the client's state."""
+        if self.in_room:
+            print("\n--- SyncNet Room Menu ---")
+            print("Commands: Chat <message>, Leave, WhereAmI, Help, Exit")
+        else:
+            print("\n--- SyncNet Main Menu ---")
+            print("Commands: Create <room>, Join <room>, List, Help, Exit")
 
     def start(self):
         """Prompt for username and start the main client loop."""
@@ -39,11 +62,14 @@ class SyncNetClient:
             self.connect() # This will block until a connection is made to the leader
             
             # This inner loop handles the user interface while connected.
+            if self.is_connected:
+                self._print_help() # Show menu once on connect
+                self._start_heartbeat()
+
             while self.is_connected and self._running:
-                if self.in_room:
-                    self.room_menu()
-                else:
-                    self.main_menu()
+                # Non-blocking input handling loop
+                self._handle_user_input()
+                time.sleep(0.1) # Prevent busy-waiting
             
             # If the inner loop breaks, we are disconnected.
             if self._running:
@@ -101,7 +127,6 @@ class SyncNetClient:
         while self._running:
             try:
                 # Set a timeout on recv so the loop can check self._running periodically
-                # This makes shutdown cleaner.
                 if self.sock:
                     self.sock.settimeout(1.0) 
                     data = self.sock.recv(4096)
@@ -111,6 +136,9 @@ class SyncNetClient:
                 if not data:
                     break # Connection closed by the server
                 
+                # Any data from the server resets the heartbeat timer
+                self.last_pong_time = time.time()
+
                 message = json.loads(data.decode())
                 self._handle_server_message(message)
 
@@ -134,50 +162,53 @@ class SyncNetClient:
         payload = message.get("payload")
 
         with self.prompt_lock:
-            # Erase the current input line to print the message cleanly
-            sys.stdout.write('\r' + ' ' * 60 + '\r')
-
+            # Clear the current line to make way for the server message
+            current_line = self._get_prompt() + self._user_input_buffer
+            sys.stdout.write('\r' + ' ' * len(current_line) + '\r')
+            
+            # Handle non-printing messages first
             if msg_type == "redirect":
-                # Handle redirect by updating the server index and closing the connection.
-                # This will interrupt the connect() method and cause it to retry with the new index.
                 leader_id = payload.get("leader_id")
                 for i, config in enumerate(DEFAULT_SERVER_CONFIGS):
                     if config.server_id == leader_id:
                         self.current_server_index = i
                         break
-                self.redirect_in_progress.set() # Signal that a redirect happened
+                self.redirect_in_progress.set()
                 self.is_connected = False
-                if self.sock:
-                    self.sock.close() # This is the key change to unblock the main thread
-            elif msg_type == "ack" and payload.get("command") == "set_username":
-                self.connection_acknowledged.set()
-            elif msg_type == "room_joined":
-                self.in_room = True
-                self.current_room = payload.get("room_name")
-                print(f"[System]: {payload.get('message')}")
-                self.state_change_event.set()
-            elif msg_type == "room_left":
-                self.in_room = False
-                self.current_room = None
-                print(f"[System]: {payload.get('message')}")
-                self.state_change_event.set()
-            elif msg_type == "chat":
-                sender = payload.get('sender_name', 'Unknown')
-                print(f"[{self.current_room}] {sender}: {payload.get('message')}")
-            elif msg_type == "room_list":
-                print("Available rooms: " + (", ".join(payload) if payload else "None"))
-            elif msg_type == "error":
-                print(f"[Error]: {payload}")
-            elif msg_type == "info":
-                 print(f"[Info]: {payload}")
-            else:
-                # Silently ignore other message types for a cleaner UI
-                pass
-            
-            # Reprint the input prompt
-            prompt = f"[{self.current_room}]> " if self.in_room else "> "
-            sys.stdout.write(prompt)
+                if self.sock: self.sock.close()
+                return # Don't print or show a prompt for redirects
+
+            # The actual message printing logic for visible messages
+            self._print_server_message(msg_type, payload)
+
+            # Reprint the input prompt and the user's current text
+            sys.stdout.write(self._get_prompt() + self._user_input_buffer)
             sys.stdout.flush()
+
+    def _print_server_message(self, msg_type: str, payload: Any):
+        """Handles the actual printing of the message content."""
+        if msg_type == "ack" and payload.get("command") == "set_username":
+            self.connection_acknowledged.set()
+        elif msg_type == "room_joined":
+            self.in_room = True
+            self.current_room = payload.get("room_name")
+            print(f"[System]: {payload.get('message')}")
+            self.state_change_event.set()
+        elif msg_type == "room_left":
+            self.in_room = False
+            self.current_room = None
+            print(f"[System]: {payload.get('message')}")
+            self.state_change_event.set()
+        elif msg_type == "chat":
+            sender = payload.get('sender_name', 'Unknown')
+            print(f"[{self.current_room}] {sender}: {payload.get('message')}")
+        elif msg_type == "room_list":
+            print("Available rooms: " + (", ".join(payload) if payload else "None"))
+        elif msg_type == "error":
+            print(f"[Error]: {payload}")
+        elif msg_type == "info":
+            print(f"[Info]: {payload}")
+        # Silently ignore other message types like 'pong'
 
     def send_command(self, command: str, payload: dict = None):
         """Send a command to the server."""
@@ -190,78 +221,150 @@ class SyncNetClient:
         except (socket.error, BrokenPipeError):
             self.is_connected = False
         
-    def main_menu(self):
-        """Display and handle the main menu."""
-        print("\n--- SyncNet Main Menu ---")
-        print("Commands: Create <room>, Join <room>, List, Exit")
-        
-        try:
-            user_input = input("> ").strip()
-            if not user_input:
-                return # Go back to start of the main while loop
+    def _handle_user_input(self):
+        """Platform-agnostic non-blocking check for user input."""
+        if _IS_WINDOWS:
+            if msvcrt.kbhit():
+                char = msvcrt.getwch() # No-echo version
+                if char in ('\r', '\n'): # Enter key
+                    sys.stdout.write('\n')
+                    sys.stdout.flush()
+                    self._process_input_buffer()
+                elif char == '\x08': # Backspace
+                    if self._user_input_buffer:
+                        self._user_input_buffer = self._user_input_buffer[:-1]
+                        # Redraw the line after backspace
+                        line = self._get_prompt() + self._user_input_buffer
+                        sys.stdout.write('\r' + ' ' * (len(line) + 20) + '\r') # Extra space to clear
+                        sys.stdout.write(line)
+                        sys.stdout.flush()
+                else:
+                    self._user_input_buffer += char
+                    sys.stdout.write(char) # Echo manually
+                    sys.stdout.flush()
+        else:
+            # Non-Windows implementation would go here
+            # For now, we fall back to the blocking input for simplicity
+            self._blocking_input_loop()
 
-            parts = user_input.split()
-            command = parts[0].lower()
+    def _get_prompt(self) -> str:
+        return f"[{self.current_room}]> " if self.in_room else "> "
+
+    def _process_input_buffer(self):
+        """Process the command from the input buffer."""
+        user_input = self._user_input_buffer.strip()
+        self._user_input_buffer = "" # Reset buffer
+
+        if not user_input:
+            # Reprint prompt on empty input
+            sys.stdout.write(self._get_prompt())
+            sys.stdout.flush()
+            return
             
-            if command == "create":
-                if len(parts) > 1:
-                    self.state_change_event.clear()
-                    self.send_command("create_room", {"room_name": parts[1]})
-                    if not self.state_change_event.wait(timeout=2.0): # Wait for confirmation
-                        print("[System] Server did not confirm room creation in time.")
-                else:
-                    print("Usage: Create <room_name>")
-            elif command == "join":
-                 if len(parts) > 1:
-                    self.state_change_event.clear()
-                    self.send_command("join_room", {"room_name": parts[1]})
-                    if not self.state_change_event.wait(timeout=2.0): # Wait for confirmation
-                        print("[System] Server did not confirm room join in time.")
-                 else:
-                    print("Usage: Join <room_name>")
-            elif command == "list":
-                self.send_command("list_rooms")
-            elif command == "exit":
-                self.stop()
-            else:
-                print("Unknown command. Available commands: Create, Join, List, Exit")
+        if self.in_room:
+            self._room_loop(user_input)
+        else:
+            self._main_loop(user_input)
 
-        except (KeyboardInterrupt, EOFError):
-            self.stop()
-
-    def room_menu(self):
-        """Display and handle the in-room menu."""
-        print("\n--- SyncNet Room Menu ---")
-        print("Commands: Chat <message>, Leave, WhereAmI, Exit")
-        
-        prompt = f"[{self.current_room}]> "
+    def _blocking_input_loop(self):
+        """Fallback to blocking input for non-Windows systems."""
         try:
-            user_input = input(prompt).strip()
-            if not user_input:
-                return
-
-            parts = user_input.split(" ", 1)
-            command = parts[0].lower()
-
-            if command == "chat":
-                if len(parts) > 1:
-                    self.send_command("chat", {"message": parts[1]})
-                else:
-                    print("Usage: Chat <message>")
-            elif command == "leave":
-                self.state_change_event.clear()
-                self.send_command("leave_room")
-                if not self.state_change_event.wait(timeout=2.0): # Wait for confirmation
-                    print("[System] Server did not confirm leaving room in time.")
-            elif command == "whereami":
-                self.send_command("whereami")
-            elif command == "exit":
-                self.stop()
+            prompt = self._get_prompt()
+            user_input = input(prompt)
+            if self.in_room:
+                self._room_loop(user_input)
             else:
-                print("Unknown command. Available commands: Chat <message>, Leave, WhereAmI, Exit")
-
-        except (KeyboardInterrupt, EOFError):
+                self._main_loop(user_input)
+        except (EOFError, KeyboardInterrupt):
             self.stop()
+            
+    def _main_loop(self, user_input: str):
+        """Handle input when in the main menu (not in a room)."""
+        parts = user_input.split(" ", 1)
+        command = parts[0].lower()
+        arg = parts[1] if len(parts) > 1 else None
+        
+        if command == "create":
+            if arg:
+                self.state_change_event.clear()
+                self.send_command("create_room", {"room_name": arg})
+                if not self.state_change_event.wait(timeout=2.0):
+                    print("[System] Server did not confirm room creation in time.")
+            else:
+                print("Usage: Create <room_name>")
+        elif command == "join":
+             if arg:
+                self.state_change_event.clear()
+                self.send_command("join_room", {"room_name": arg})
+                if not self.state_change_event.wait(timeout=2.0):
+                    print("[System] Server did not confirm room join in time.")
+             else:
+                print("Usage: Join <room_name>")
+        elif command == "list":
+            self.send_command("list_rooms")
+        elif command == "help":
+            self._print_help()
+        elif command == "exit":
+            self.stop()
+        else:
+            print(f"Unknown command: '{command}'. Type 'Help' for a list of commands.")
+            # Reprint prompt after command
+            sys.stdout.write(self._get_prompt())
+            sys.stdout.flush()
+
+    def _room_loop(self, user_input: str):
+        """Handle input when inside a chat room."""
+        # If the input starts with a known command, process it.
+        # Otherwise, send the entire input as a chat message.
+        parts = user_input.split(" ", 1)
+        command = parts[0].lower()
+        arg = parts[1] if len(parts) > 1 else None
+        
+        if command == "leave":
+            self.state_change_event.clear()
+            self.send_command("leave_room")
+            if not self.state_change_event.wait(timeout=2.0):
+                print("[System] Server did not confirm leaving room in time.")
+        elif command == "whereami":
+            self.send_command("whereami")
+        elif command == "help":
+            self._print_help()
+        elif command == "exit":
+            self.stop()
+        else:
+            # Default action is to send a chat message
+            self.send_command("chat", {"message": user_input})
+
+    def _start_heartbeat(self):
+        """Start the heartbeat thread."""
+        if self._heartbeat_thread and self._heartbeat_thread.is_alive():
+            return
+        
+        self._heartbeat_thread = threading.Thread(target=self._heartbeat_loop, daemon=True)
+        self._heartbeat_thread.start()
+
+    def _heartbeat_loop(self):
+        """Periodically send pings and check for server responsiveness."""
+        HEARTBEAT_INTERVAL = 2.5 # seconds
+        HEARTBEAT_TIMEOUT = 10.0 # seconds
+
+        self.last_pong_time = time.time() # Initial timestamp
+
+        while self.is_connected and self._running:
+            # Check if the server is still alive
+            if time.time() - self.last_pong_time > HEARTBEAT_TIMEOUT:
+                print("\n[System] Heartbeat timeout. Connection lost.")
+                self.is_connected = False # This will break the main loops
+                # Close socket to interrupt any blocking calls like input()
+                if self.sock:
+                    self.sock.close()
+                break # Exit the heartbeat loop
+
+            # Send a ping
+            self.send_command("ping")
+            
+            # Wait for the next interval
+            time.sleep(HEARTBEAT_INTERVAL)
 
     def stop(self):
         """Stop the client gracefully."""

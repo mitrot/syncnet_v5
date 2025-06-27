@@ -340,7 +340,8 @@ class SyncNetServer:
             "list_rooms": self._handle_list_rooms,
             "leave_room": self._handle_leave_room,
             "chat": self._handle_chat_message,
-            "whereami": self._handle_whereami
+            "whereami": self._handle_whereami,
+            "ping": self._handle_ping
         }
         
         handler = handler_map.get(command)
@@ -433,6 +434,10 @@ class SyncNetServer:
         with self._lock:
             room_name = self.client_to_room.get(client_id, "You are not in a room.")
         self._send_to_client(client_id, {"type": "info", "payload": room_name})
+
+    def _handle_ping(self, client_id: str, payload: dict):
+        """Respond to a client's ping to show the server is alive."""
+        self._send_to_client(client_id, {"type": "pong"})
 
     def _cleanup_client(self, client_id: str):
         """Clean up resources for a disconnected client."""
