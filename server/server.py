@@ -220,7 +220,11 @@ class SyncNetServer:
             leader_is_alive = self.current_leader and self.current_leader in self.heartbeat.get_active_servers()
             
             if not leader_is_alive:
-                self.logger.warning("Leader is down or not established. Starting election.")
+                if self.current_leader:
+                    self.logger.warning(f"Leader {self.current_leader} is down. Clearing status and starting election.")
+                    self.current_leader = None # Explicitly clear knowledge of the dead leader
+                else:
+                    self.logger.warning("Leader not established. Starting election.")
                 self._run_election()
             
             time.sleep(TIMEOUTS['election_timeout'])

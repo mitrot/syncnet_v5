@@ -66,19 +66,27 @@ class SyncNetClient:
                 self._print_help() # Show menu once on connect
                 self._start_heartbeat()
 
+            # Main UI loop
             while self.is_connected and self._running:
-                # Non-blocking input handling loop
                 self._handle_user_input()
                 time.sleep(0.1) # Prevent busy-waiting
             
             # If the inner loop breaks, we are disconnected.
+            # The connect() method will handle printing the reconnect message.
             if self._running:
-                print("\n[System] Connection lost. Reconnecting...")
-                time.sleep(2)
+                time.sleep(1) # Brief pause before trying to reconnect
 
     def connect(self):
         """Loop until a connection to the leader is established."""
+        is_retrying = False
         while not self.is_connected and self._running:
+            # If we're looping, it means a connection attempt failed.
+            if is_retrying:
+                time.sleep(2) # Wait before the next attempt
+            else:
+                # This is the first attempt. If it fails, we'll start showing messages.
+                pass
+
             server_config = DEFAULT_SERVER_CONFIGS[self.current_server_index]
             host, port = server_config.host, server_config.tcp_port
             try:
@@ -120,7 +128,10 @@ class SyncNetClient:
 
             except (socket.timeout, ConnectionRefusedError, OSError):
                 self.current_server_index = (self.current_server_index + 1) % len(DEFAULT_SERVER_CONFIGS)
-                # No print statement here, just try the next server silently.
+            
+            if not self.is_connected and not is_retrying and self._running:
+                print("\n[System] Connection lost. Searching for leader...")
+                is_retrying = True
     
     def _receive_messages(self):
         """Listen for incoming messages from the server."""
@@ -149,9 +160,8 @@ class SyncNetClient:
                 # We break the loop silently and let the main loop handle it.
                 break
         
-        # If the connection breaks for any reason, signal the connect() loop to wake up
-        # and reset the client's application state.
-        self.connection_acknowledged.set()
+        # If the connection breaks for any reason, reset the client's application state.
+        # The main loop will handle reconnection.
         self.is_connected = False
         self.in_room = False
         self.current_room = None
