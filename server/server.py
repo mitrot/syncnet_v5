@@ -70,11 +70,11 @@ class SyncNetServer:
         self._state = new_state
         self.logger.info(f"Server state changed to: {new_state.name}")
 
-    def start(self):
+    def start(self) -> bool:
         """Start the SyncNet server and wait for it to be running."""
         if self._state != ServerState.STOPPED:
             self.logger.warning("Server is not stopped, cannot start.")
-            return
+            return False
 
         self.state = ServerState.STARTING
         self._startup_event.clear()
@@ -88,6 +88,14 @@ class SyncNetServer:
             self.logger.error("Server failed to start within the timeout.")
             self.stop()
             self.state = ServerState.ERROR
+            return False
+        
+        # If we are here, the event was set. The state tells us if it was a success.
+        if self._state == ServerState.RUNNING:
+            return True
+        else:
+            self.logger.error(f"Server failed to start, final state: {self.state}")
+            return False
             
     def _run(self):
         """The main execution loop of the server, run in a separate thread."""
@@ -525,17 +533,6 @@ class SyncNetServer:
                 identity = data.get("identity")
                 self.client_identities[client_id] = identity
 
-    def get_server_status(self) -> Dict[str, Any]:
-        """Get comprehensive server status."""
-        return {
-            'server_id': self.server_id,
-            'state': self.state,
-            'is_leader': self.is_leader,
-            'current_leader': self.current_leader,
-            'active_servers': self.heartbeat.get_active_servers(),
-            'server_statuses': self.heartbeat.get_server_statuses()
-        }
-
     def _send_redirect(self, client_socket: socket.socket):
         """Inform a client that this is not the leader and provide leader info."""
         if not self.current_leader:
@@ -562,62 +559,8 @@ class SyncNetServer:
         except Exception as e:
             self.logger.error(f"Failed to send redirect: {e}")
 
-# Signal handler for graceful shutdown
-_server_instance = None
-
-def signal_handler(signum, frame):
-    """Handle shutdown signals"""
-    global _server_instance
-    if _server_instance:
-        print(f"\nReceived signal {signum}, shutting down gracefully...")
-        _server_instance.stop()
-        sys.exit(0)
-
-def main(server_id: str):
-    """Main server startup function"""
-    global _server_instance
-    
-    # Setup logging
-    logging.basicConfig(
-        level=logging.INFO,
-        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-    )
-    
-    # Setup signal handlers
-    signal.signal(signal.SIGINT, signal_handler)
-    signal.signal(signal.SIGTERM, signal_handler)
-    
-    # Create and start server
-    _server_instance = SyncNetServer(server_id)
-    
-    try:
-        if _server_instance.start():
-            print(f"🚀 SyncNet server {server_id} is running!")
-            print("Press Ctrl+C to stop")
-            
-            # Keep main thread alive
-            while _server_instance.state == ServerState.RUNNING:
-                time.sleep(1)
-        else:
-            print(f"❌ Failed to start server {server_id}")
-            return 1
-            
-    except KeyboardInterrupt:
-        print("\nShutdown requested by user")
-    except Exception as e:
-        print(f"❌ Server error: {e}")
-        return 1
-    finally:
-        if _server_instance:
-            _server_instance.stop()
-    
-    return 0
-
 if __name__ == '__main__':
-    if len(sys.argv) != 2:
-        print("Usage: python server.py <server_id>")
-        print("Available server_ids: server1, server2, server3")
-        sys.exit(1)
-    
-    server_id = sys.argv[1]
-    sys.exit(main(server_id)) 
+    # This file is not the entry point. Run server/main.py instead.
+    # This is a temporary measure to prevent accidental execution.
+    import server.main
+    server.main.main() 

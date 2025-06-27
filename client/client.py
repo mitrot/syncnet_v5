@@ -16,7 +16,7 @@ except ImportError:
     import termios
     _IS_WINDOWS = False
 
-# Robustly add project root to the Python path
+# add project root to the Python path
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
@@ -57,11 +57,11 @@ class SyncNetClient:
         self.username = input("Please enter your name: ").strip() or "Anonymous"
         self._running = True
         
-        # This outer loop handles maintaining a connection.
+        # outer loop handles maintaining a connection.
         while self._running:
             self.connect() # This will block until a connection is made to the leader
             
-            # This inner loop handles the user interface while connected.
+            # inner loop handles the user interface while connected.
             if self.is_connected:
                 self._print_help() # Show menu once on connect
                 self._start_heartbeat()
@@ -84,7 +84,7 @@ class SyncNetClient:
             if is_retrying:
                 time.sleep(2) # Wait before the next attempt
             else:
-                # This is the first attempt. If it fails, we'll start showing messages.
+                # first attempt - If it fails, we'll start showing messages.
                 pass
 
             server_config = DEFAULT_SERVER_CONFIGS[self.current_server_index]
@@ -254,7 +254,7 @@ class SyncNetClient:
                     sys.stdout.flush()
         else:
             # Non-Windows implementation would go here
-            # For now, we fall back to the blocking input for simplicity
+            # not in scope.
             self._blocking_input_loop()
 
     def _get_prompt(self) -> str:
@@ -266,7 +266,6 @@ class SyncNetClient:
         self._user_input_buffer = "" # Reset buffer
 
         if not user_input:
-            # Reprint prompt on empty input
             sys.stdout.write(self._get_prompt())
             sys.stdout.flush()
             return
@@ -318,7 +317,6 @@ class SyncNetClient:
             self.stop()
         else:
             print(f"Unknown command: '{command}'. Type 'Help' for a list of commands.")
-            # Reprint prompt after command
             sys.stdout.write(self._get_prompt())
             sys.stdout.flush()
 

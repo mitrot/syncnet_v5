@@ -10,91 +10,80 @@ import os
 import traceback
 
 # Add project root to path for imports
-sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if project_root not in sys.path:
+    sys.path.insert(0, project_root)
 
-from server.server import SyncNetServer
+from server.server import SyncNetServer, ServerState
 from common.config import DEFAULT_SERVER_CONFIGS
 
 # Global server instance for signal handling
-_server_instance: SyncNetServer = None
+_server_instance = None
 
-def setup_logging(log_level: str = 'INFO', server_id: str = 'main'):
-    """Setup logging configuration."""
-    level = getattr(logging, log_level.upper(), logging.INFO)
-    log_dir = "logs"
-    os.makedirs(log_dir, exist_ok=True)
-    
-    log_file = os.path.join(log_dir, f"{server_id}_{int(time.time())}.log")
-    
-    # Use a formatter that is compatible with more terminals
-    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
-    
-    # Configure root logger
-    root_logger = logging.getLogger()
-    root_logger.setLevel(level)
-    
-    # Remove existing handlers to avoid duplicates
-    if root_logger.hasHandlers():
-        root_logger.handlers.clear()
-        
-    # Console Handler
-    console_handler = logging.StreamHandler(sys.stdout)
-    console_handler.setFormatter(formatter)
-    root_logger.addHandler(console_handler)
-    
-    # File Handler
-    try:
-        file_handler = logging.FileHandler(log_file, mode='a', encoding='utf-8')
-        file_handler.setFormatter(formatter)
-        root_logger.addHandler(file_handler)
-    except Exception as e:
-        print(f"Error setting up file logger: {e}")
-
-def shutdown_handler(signum, frame):
+def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
     global _server_instance
-    print(f"\n🛑 Signal {signum} received, shutting down gracefully...")
     if _server_instance:
+        print(f"\n🛑 Signal {signum} received, shutting down gracefully...")
         _server_instance.stop()
-    sys.exit(0)
 
 def main():
     """Main server entry point."""
     global _server_instance
 
-    parser = argparse.ArgumentParser(description='SyncNet v5 Distributed Server')
-    parser.add_argument('--server-id', required=True, 
-                       choices=[c.server_id for c in DEFAULT_SERVER_CONFIGS],
-                       help='Server identifier')
-    parser.add_argument('--log-level', default='INFO',
-                       choices=['DEBUG', 'INFO', 'WARNING', 'ERROR'],
-                       help='Logging level')
-    
+    parser = argparse.ArgumentParser(description="SyncNet v5 Server")
+    parser.add_argument('--server-id', type=str, required=True, help='The ID of the server to start (e.g., server1)')
+    parser.add_argument('--log-level', type=str, default='INFO', help='Set the logging level (e.g., DEBUG, INFO, WARNING)')
     args = parser.parse_args()
+
+    log_dir = "logs"
+    if not os.path.exists(log_dir):
+        os.makedirs(log_dir)
+        
+    log_file = os.path.join(log_dir, f"{args.server_id}.log")
     
-    setup_logging(args.log_level, args.server_id)
-    logger = logging.getLogger('main')
+    # Use the root logger for configuration
+    root_logger = logging.getLogger()
+    root_logger.setLevel(getattr(logging, args.log_level.upper(), logging.INFO))
     
-    signal.signal(signal.SIGINT, shutdown_handler)
-    signal.signal(signal.SIGTERM, shutdown_handler)
+    formatter = logging.Formatter('%(asctime)s - %(name)s - %(levelname)s - %(message)s')
+    
+    # File handler
+    fh = logging.FileHandler(log_file, mode='w') # Overwrite log on each start
+    fh.setFormatter(formatter)
+    root_logger.addHandler(fh)
+    
+    # Stream handler (console)
+    sh = logging.StreamHandler()
+    sh.setFormatter(formatter)
+    root_logger.addHandler(sh)
+    
+    main_logger = logging.getLogger('main')
+    
+    # The signal handler is set up within the SyncNetServer class now.
+    
+    _server_instance = SyncNetServer(args.server_id)
     
     try:
-        logger.info(f"Starting SyncNet v5 Server: {args.server_id}")
-        _server_instance = SyncNetServer(args.server_id)
-        _server_instance.start()
-        
-        # Keep main thread alive while server is running or starting
-        while _server_instance and _server_instance.state in ["starting", "running"]:
-            time.sleep(1)
+        if _server_instance.start():
+            main_logger.info(f"SyncNet server {args.server_id} is running! Press Ctrl+C to stop.")
+            
+            # Keep main thread alive while server is running
+            while _server_instance.state == 'running':
+                time.sleep(1)
+        else:
+            main_logger.error(f"Failed to start server {args.server_id}")
+            sys.exit(1)
             
     except Exception as e:
-        logger.error(f"Server startup failed: {e}\n{traceback.format_exc()}")
+        main_logger.critical(f"Unhandled exception in main: {e}", exc_info=True)
         sys.exit(1)
-    
     finally:
-        if _server_instance and _server_instance.state != "stopped":
-            logger.info("Main loop finished, ensuring server shutdown.")
+        if _server_instance and _server_instance.state != 'stopped':
             _server_instance.stop()
+        main_logger.info("Main function finished.")
+    
+    sys.exit(0)
 
 if __name__ == '__main__':
     main() 
