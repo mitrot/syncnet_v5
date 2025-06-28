@@ -502,19 +502,33 @@ class SyncNetServer:
         """Broadcast a UDP message to all other servers via unicast."""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                # No broadcast needed; we send directly to each server.
                 encoded_message = json.dumps(message).encode()
                 
-                for config in DEFAULT_SERVER_CONFIGS:
-                    # Don't send to self
-                    if config.server_id == self.server_id:
+                # Note: get_active_servers() can still include a server that just died,
+                # before the failure detector has officially marked it as FAILED.
+                active_servers = self.heartbeat.get_active_servers()
+                
+                for server_id in active_servers:
+                    if server_id == self.server_id:
                         continue
                     
-                    self.logger.debug(f"Broadcasting UDP message to {config.host}:{config.heartbeat_port}")
-                    # Broadcast to heartbeat port
-                    sock.sendto(encoded_message, (config.host, config.heartbeat_port))
+                    config = next((c for c in DEFAULT_SERVER_CONFIGS if c.server_id == server_id), None)
+                    if not config:
+                        continue
+
+                    try:
+                        self.logger.debug(f"Sending UDP message to {config.host}:{config.heartbeat_port}")
+                        sock.sendto(encoded_message, (config.host, config.heartbeat_port))
+                    except socket.gaierror:
+                        # This can happen if a Docker container is killed and its DNS entry is removed.
+                        # It's a non-fatal error in a failover scenario. The heartbeat checker will handle it.
+                        self.logger.debug(f"Could not resolve host {config.host}, it may be down.")
+                    except Exception as e:
+                        self.logger.error(f"Failed to send UDP message to {config.host}: {e}")
+
         except Exception as e:
-            self.logger.error(f"Failed to broadcast UDP message: {e}")
+            # This would be an error creating the socket itself.
+            self.logger.error(f"Failed to create UDP socket for broadcast: {e}")
 
     def _replicate_state(self, action: str, data: dict):
         """Broadcast a state change to all other servers."""

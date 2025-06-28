@@ -6,6 +6,7 @@ import time
 import os
 from typing import Any, List, Optional
 import argparse
+import random
 
 # Use platform-specific non-blocking input
 try:
@@ -27,11 +28,19 @@ from common.config import DEFAULT_SERVER_CONFIGS, ServerConfig
 class SyncNetClient:
     """A command-line client for the SyncNet v5 chat system."""
 
-    def __init__(self, servers: Optional[List[ServerConfig]] = None):
+    def __init__(self, servers: Optional[List[ServerConfig]] = None, connect_via_localhost: bool = False):
         self.sock: socket.socket = None
         self.username: str = "Anonymous"
         self.is_connected = False
-        self.servers = servers or DEFAULT_SERVER_CONFIGS
+        self.connect_via_localhost = connect_via_localhost
+        
+        # The full list of servers to use as a fallback during reconnection.
+        self.initial_servers = self._get_default_servers(self.connect_via_localhost)
+        
+        # The list of servers the client is currently attempting to connect to.
+        # It starts with the user-provided server, or the full list if none was provided.
+        self.servers = servers or list(self.initial_servers)
+        
         self.current_server_index = 0
         self._receive_thread = None
         self._running = False
@@ -44,6 +53,15 @@ class SyncNetClient:
         self.last_pong_time = 0
         self._heartbeat_thread = None
         self._user_input_buffer = ""
+
+    def _get_default_servers(self, use_localhost: bool) -> List[ServerConfig]:
+        if not use_localhost:
+            return DEFAULT_SERVER_CONFIGS
+        
+        return [
+            ServerConfig(c.server_id, 'localhost', c.tcp_port, c.heartbeat_port, c.ring_position)
+            for c in DEFAULT_SERVER_CONFIGS
+        ]
 
     def _print_help(self):
         """Prints the available commands based on the client's state."""
@@ -129,7 +147,16 @@ class SyncNetClient:
                     self.current_server_index = (self.current_server_index + 1) % len(self.servers)
 
             except (socket.timeout, ConnectionRefusedError, OSError):
-                self.current_server_index = (self.current_server_index + 1) % len(self.servers)
+                # If a connection attempt fails while we are focused on a single server (a presumed leader),
+                # we should revert to the full list to find a new leader.
+                if len(self.servers) == 1:
+                    print("\n[System] Connection to leader failed. Searching for a new leader...")
+                    self.servers = list(self.initial_servers) # Revert to the full initial list
+                    # Start search from a random server to distribute load
+                    self.current_server_index = random.randint(0, len(self.servers) - 1)
+                else:
+                    # We were already using the full list, so just try the next one.
+                    self.current_server_index = (self.current_server_index + 1) % len(self.servers)
             
             if not self.is_connected and not is_retrying and self._running:
                 print("\n[System] Connection lost. Searching for leader...")
@@ -193,9 +220,8 @@ class SyncNetClient:
 
                 # If the client is connecting from outside Docker (e.g., localhost),
                 # it must override the server's advertised Docker hostname with one it can resolve.
-                original_host = self.servers[self.current_server_index].host
                 connect_to_host = leader_host
-                if original_host in ('localhost', '127.0.0.1'):
+                if self.connect_via_localhost:
                     connect_to_host = 'localhost'
                     print(f"\n[System] Redirected to leader {leader_id} ({leader_host}:{leader_port}). Connecting via {connect_to_host}:{leader_port}.")
                 else:
@@ -421,14 +447,19 @@ if __name__ == "__main__":
     args = parser.parse_args()
 
     custom_servers = None
+    is_localhost_connect = False
     if args.host and args.port:
         print(f"Attempting to connect to specified server: {args.host}:{args.port}")
         # Create a dummy ServerConfig for the custom server. The other fields aren't used by the client.
         custom_servers = [ServerConfig(server_id='custom', host=args.host, tcp_port=args.port, heartbeat_port=0, ring_position=0)]
+        if args.host in ('localhost', '127.0.0.1'):
+            is_localhost_connect = True
     else:
-        print("Starting client with default server list...")
+        # No host/port provided, using default list. We assume connection from the host machine.
+        print("Starting client with default server list, targeting localhost...")
+        is_localhost_connect = True # Let the constructor handle the server list creation
 
-    client = SyncNetClient(servers=custom_servers)
+    client = SyncNetClient(servers=custom_servers, connect_via_localhost=is_localhost_connect)
     try:
         client.start()
     except (KeyboardInterrupt, EOFError):
