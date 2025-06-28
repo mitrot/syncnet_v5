@@ -59,7 +59,7 @@ You can start multiple clients in separate terminal windows to test the chat fun
 
 This is where SyncNet shines. To test the system's resilience:
 
-1.  Connect at least two clients (e.g., "Tom" and "Lena"). Have them join the same room.
+1.  Connect at least two clients (e.g., "Aida" and "Bengü"). Have them join the same room.
 2.  In the terminal where Docker Compose is running, find the current leader (initially `server3`).
 3.  Kill the leader container by pressing `Ctrl+C` in the Docker terminal, or by running `docker-compose stop server3`.
 4.  **Observe the server logs**: You will see the other servers detect the failure and elect a new leader (`server2`).

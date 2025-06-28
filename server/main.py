@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """SyncNet v5 Server Entry Point"""
 
 import sys
@@ -24,7 +23,7 @@ def signal_handler(signum, frame):
     """Handle shutdown signals gracefully."""
     global _server_instance
     if _server_instance:
-        print(f"\n🛑 Signal {signum} received, shutting down gracefully...")
+        print(f"\n Signal {signum} received, shutting down gracefully...")
         _server_instance.stop()
 
 def main():
@@ -60,7 +59,6 @@ def main():
     
     main_logger = logging.getLogger('main')
     
-    # The signal handler is set up within the SyncNetServer class now.
     
     _server_instance = SyncNetServer(args.server_id)
     
