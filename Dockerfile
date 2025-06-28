@@ -14,7 +14,6 @@ COPY . .
 # Expose the necessary ports
 # TCP for clients, UDP for heartbeats/replication
 EXPOSE 8000-8002
-EXPOSE 9000-9002
 
 # The main command to run when the container starts
 # The server_id will be passed in from docker-compose
