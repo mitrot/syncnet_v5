@@ -1,13 +1,13 @@
 # SyncNet v5 - A Containerized, Fault-Tolerant Chat System
 
-Welcome to SyncNet v5, a distributed chat server designed for stability, resilience, and ease of use. The entire server cluster runs within Docker, providing a self-contained, portable, and scalable environment right out of the box.
+Welcome to SyncNet v5, a distributed chat server designed for stability, resilience, and ease of use. The entire server cluster runs within Docker, providing a self-contained, portable, and scalable environment.
 
 ## Core Architecture
 
-- **Containerized Cluster**: The system runs as a three-server cluster using Docker and Docker Compose. This simplifies deployment and ensures a consistent environment.
+- **Containerized Cluster**: The system is designed to run as a three-server cluster using Docker.
 - **Deterministic Leader Election**: When a leader fails, the active server with the highest `ring_position` automatically becomes the new leader. This design is simple, robust, and prevents deadlocks.
 - **State Replication**: The leader replicates critical state (like chat room creation and user identities) to all followers via UDP broadcasts, ensuring they are ready to take over if the leader fails.
-- **Resilient Client**: The client application is designed to handle network failures gracefully. If it loses connection to the leader, it automatically searches for and connects to the new leader once one is elected.
+- **Resilient Client**: The client application is designed to handle network failures gracefully. If it loses connection to the leader, it automatically searches for and connects to the new leader.
 
 ---
 
@@ -16,72 +16,103 @@ Welcome to SyncNet v5, a distributed chat server designed for stability, resilie
 ### Prerequisites
 
 - [Docker](https://www.docker.com/products/docker-desktop/)
-- [Docker Compose](https://docs.docker.com/compose/install/) (comes included with Docker Desktop)
+- [Docker Compose](https://docs.docker.com/compose/install/) (for the simple local setup)
 - [Python 3](https://www.python.org/downloads/) (for running the client)
-
-### Step 1: Start the Server Cluster
-
-The entire three-server cluster is managed by Docker Compose. To start it, navigate to the project's root directory in your terminal and run a single command:
-
-```bash
-docker-compose up --build
-```
-
-This command will:
-1.  Build the Docker image for the servers.
-2.  Create and start three containers, one for each server.
-3.  Display the combined logs for all three servers in your terminal.
-
-After a few seconds, you will see the servers start up, perform an election, and select `server3` as the initial leader.
-
-To run the servers in the background (detached mode), use:
-```bash
-docker-compose up --build -d
-```
-
-To stop the cluster, press `Ctrl+C` in the terminal where it's running, or run `docker-compose down` from the project directory.
-
-### Step 2: Connect a Client
-
-Once the server cluster is running, you can connect clients. The client is a Python script designed to run on your local machine.
-
-1.  **Open a new terminal window.**
-2.  **Navigate to the project root directory.**
-3.  **Run the client script:**
-    ```bash
-    python client/client.py --host localhost --port 8000
-    ```
-    - You can connect to any of the server ports (`8000`, `8001`, or `8002`). If you connect to a follower, the server will automatically redirect your client to the current leader.
-
-You can start multiple clients in separate terminal windows to test the chat functionality.
-
-### Step 3: Test Fault Tolerance
-
-This is where SyncNet shines. To test the system's resilience:
-
-1.  Connect at least two clients (e.g., "Aida" and "Bengü"). Have them join the same room.
-2.  In the terminal where Docker Compose is running, find the current leader (initially `server3`).
-3.  Kill the leader container by pressing `Ctrl+C` in the Docker terminal, or by running `docker-compose stop server3`.
-4.  **Observe the server logs**: You will see the other servers detect the failure and elect a new leader (`server2`).
-5.  **Observe the client terminals**: Both clients will briefly lose connection and then automatically reconnect to the new leader. They will be able to continue chatting seamlessly, with their state (username and current room) preserved.
 
 ---
 
-## System Configuration
+## Deployment Scenarios
 
-### Server Network Details
+SyncNet can be deployed in several ways, from a simple local setup for development to a networked setup for multi-machine testing.
 
-| Server ID | Hostname (in Docker) | Exposed Port (TCP) | Heartbeat Port (UDP) |
-|:----------|:---------------------|:-------------------|:---------------------|
-| `server1` | `server1`            | `8000`             | `8020`               |
-| `server2` | `server2`            | `8001`             | `8021`               |
-| `server3` | `server3`            | `8002`             | `8022`               |
+### Scenario 1: Local-Only Development (Easiest)
 
-### Codebase Overview
+This method uses `docker-compose` to run all three servers on your local machine. The servers will only be accessible from your machine.
+
+1.  **Configuration**: No changes needed. The default configuration uses Docker's internal networking.
+2.  **Start the Cluster**:
+    ```bash
+    docker-compose up --build
+    ```
+3.  **Connect a Client**:
+    ```bash
+    python client/client.py --host localhost --port 8000
+    ```
+
+### Scenario 2: Networked Deployment (Single or Multi-Machine)
+
+This method allows you to run the servers and make them accessible to other computers on your local area network (LAN). This is ideal for testing with collaborators.
+
+#### Step 1: Configure Server IP Addresses
+
+Before launching, you must configure the servers with the IP addresses they will run on.
+
+1.  **Find the LAN IP Address** of the machine(s) you will run the servers on.
+    *   On Windows, run `ipconfig`.
+    *   On macOS/Linux, run `ip addr` or `ifconfig`.
+    *   Look for the IPv4 address (e.g., `192.168.1.101`).
+
+2.  **Edit the Configuration File**: Open `common/config/config.py`.
+
+3.  **Update the `host` values** in `DEFAULT_SERVER_CONFIGS` with the real IP addresses.
+
+    *   **If running all servers on one machine:** Use that machine's IP for all three server entries.
+    *   **If running on three different machines:** Use the unique IP for each corresponding server.
+
+    **Example for a single machine with IP `192.168.1.179`:**
+    ```python
+    DEFAULT_SERVER_CONFIGS = [
+        ServerConfig(server_id='server1', host='192.168.1.179', tcp_port=8000, ...),
+        ServerConfig(server_id='server2', host='192.168.1.179', tcp_port=8001, ...),
+        ServerConfig(server_id='server3', host='192.168.1.179', tcp_port=8002, ...),
+    ]
+    ```
+
+#### Step 2: Build the Docker Image
+
+On each machine that will run a server, build the Docker image. This command only needs to be run once.
+
+```bash
+docker build -t syncnet-server .
+```
+
+#### Step 3: Launch the Servers
+
+On each server machine, run the corresponding `docker run` command in a separate terminal.
+
+*   **On Server Machine 1:**
+    ```bash
+    docker run -d --rm --name syncnet-server1 -p 8000:8000 -p 8020:8020/udp syncnet-server python -m server.main --server-id server1
+    ```
+*   **On Server Machine 2:**
+    ```bash
+    docker run -d --rm --name syncnet-server2 -p 8001:8001 -p 8021:8021/udp syncnet-server python -m server.main --server-id server2
+    ```
+*   **On Server Machine 3:**
+    ```bash
+    docker run -d --rm --name syncnet-server3 -p 8002:8002 -p 8022:8022/udp syncnet-server python -m server.main --server-id server3
+    ```
+
+To see the logs for a specific server, run `docker logs -f syncnet-server1`.
+To stop the servers, run `docker stop syncnet-server1 syncnet-server2 syncnet-server3`.
+
+#### Step 4: Connect a Networked Client
+
+From any machine on the same network (including the server machines), run the client and point it to the IP address of any of the running servers.
+
+```bash
+# Example connecting to the server at 192.168.1.179 on its first port
+python client/client.py --host 192.168.1.179 --port 8000
+```
+If you connect to a follower, the server will automatically redirect your client to the current leader.
+
+---
+
+## Codebase Overview
 
 -   `server/server.py`: The main server class containing all logic for elections, state replication, and client handling.
 -   `client/client.py`: The client application with robust reconnection and failover logic.
 -   `server/heartbeat.py`: The module responsible for monitoring server health.
--   `common/config/`: Contains all system configuration.
+-   `common/config/config.py`: Contains all system configuration, including server network details.
 -   `Dockerfile`: Defines the build steps for the server image.
--   `docker-compose.yml`: Defines the multi-container server cluster.
+-   `docker-compose.yml`: Defines the multi-container server cluster for local development.

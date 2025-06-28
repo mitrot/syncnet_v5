@@ -20,4 +20,7 @@ DEFAULT_SERVER_CONFIGS = [
     ServerConfig(server_id='server1', host='192.168.1.179', tcp_port=8000, heartbeat_port=8020, ring_position=1),
     ServerConfig(server_id='server2', host='192.168.1.179', tcp_port=8001, heartbeat_port=8021, ring_position=2),
     ServerConfig(server_id='server3', host='192.168.1.179', tcp_port=8002, heartbeat_port=8022, ring_position=3),
+    # The architecture supports scaling beyond 3 servers by simply adding them here.
+    #ServerConfig(server_id='server4', host='192.168.1.179', tcp_port=8003, heartbeat_port=8023, ring_position=4),
+    #ServerConfig(server_id='server5', host='192.168.1.179', tcp_port=8004, heartbeat_port=8024, ring_position=5),
 ] 
