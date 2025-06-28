@@ -1,72 +1,87 @@
-# SyncNet v5 - A Lean & Robust Distributed Chat System
+# SyncNet v5 - A Containerized, Fault-Tolerant Chat System
 
-Welcome to SyncNet v5, a distributed, fault-tolerant chat server designed for stability and simplicity. After a significant refactoring, the system has been streamlined to focus on a robust core, removing unnecessary complexity to create a solid foundation for a distributed chat application.
+Welcome to SyncNet v5, a distributed chat server designed for stability, resilience, and ease of use. The entire server cluster runs within Docker, providing a self-contained, portable, and scalable environment right out of the box.
 
 ## Core Architecture
 
-The SyncNet architecture is built on a few simple, powerful ideas. A central `Server` class manages all core logic, from handling client connections to coordinating with other servers.
+- **Containerized Cluster**: The system runs as a three-server cluster using Docker and Docker Compose. This simplifies deployment and ensures a consistent environment.
+- **Deterministic Leader Election**: When a leader fails, the active server with the highest `ring_position` automatically becomes the new leader. This design is simple, robust, and prevents deadlocks.
+- **State Replication**: The leader replicates critical state (like chat room creation and user identities) to all followers via UDP broadcasts, ensuring they are ready to take over if the leader fails.
+- **Resilient Client**: The client application is designed to handle network failures gracefully. If it loses connection to the leader, it automatically searches for and connects to the new leader once one is elected.
 
-Server health is monitored by a lean `Heartbeat` module, which uses UDP broadcasts to check the status of other servers in the cluster. This allows the system to quickly detect when a server fails.
+---
 
-Leader election is now deterministic and incredibly reliable. The previous complex algorithm was replaced with a straightforward approach: when the current leader fails, the active server with the highest `ring_position` automatically and immediately becomes the new leader. This design completely prevents the deadlocks and timeout loops that affected the previous version. All inter-server communication, including heartbeats and leader announcements, happens over a single UDP port, further simplifying the network layout.
+## How to Run the System
 
-## Getting Started
+### Prerequisites
 
-The easiest way to get the server cluster running is to use the provided scripts.
+- [Docker](https://www.docker.com/products/docker-desktop/)
+- [Docker Compose](https://docs.docker.com/compose/install/) (comes included with Docker Desktop)
+- [Python 3](https://www.python.org/downloads/) (for running the client)
 
-### 1. Launch the Cluster
-First, open a terminal in the project root and run the startup script. This will launch all three servers in separate terminal windows.
+### Step 1: Start the Server Cluster
+
+The entire three-server cluster is managed by Docker Compose. To start it, navigate to the project's root directory in your terminal and run a single command:
 
 ```bash
-scripts\start_all_servers.bat
+docker-compose up --build
 ```
 
-After a few moments, the servers will initialize, and you will see `server3` (the server with the highest ring position) announce itself as the leader.
+This command will:
+1.  Build the Docker image for the servers.
+2.  Create and start three containers, one for each server.
+3.  Display the combined logs for all three servers in your terminal.
 
-### 2. Test Fault Tolerance
-To see the system's resilience in action, simply find the terminal window for the current leader (`server3`) and close it. Within seconds, the remaining servers will detect the failure, and you will see a new leader (`server2`) elected to take its place.
+After a few seconds, you will see the servers start up, perform an election, and select `server3` as the initial leader.
 
-### 3. Stop the Cluster
-When you are finished, you can shut down all running server processes with a single command:
+To run the servers in the background (detached mode), use:
 ```bash
-scripts\stop_all_servers.bat
+docker-compose up --build -d
 ```
 
-## Project Status & Next Steps
+To stop the cluster, press `Ctrl+C` in the terminal where it's running, or run `docker-compose down` from the project directory.
 
-The core distributed architecture of SyncNet is **complete and stable**. The system can reliably detect server failures and elect a new leader without interruption.
+### Step 2: Connect a Client
 
-The immediate next step is to build the chat application logic on top of this solid foundation. This will involve implementing the client-side application, handling message forwarding between clients and the leader, and broadcasting messages from the leader out to all servers and their connected clients.
+Once the server cluster is running, you can connect clients. The client is a Python script designed to run on your local machine.
+
+1.  **Open a new terminal window.**
+2.  **Navigate to the project root directory.**
+3.  **Run the client script:**
+    ```bash
+    python client/client.py --host localhost --port 8000
+    ```
+    - You can connect to any of the server ports (`8000`, `8001`, or `8002`). If you connect to a follower, the server will automatically redirect your client to the current leader.
+
+You can start multiple clients in separate terminal windows to test the chat functionality.
+
+### Step 3: Test Fault Tolerance
+
+This is where SyncNet shines. To test the system's resilience:
+
+1.  Connect at least two clients (e.g., "Tom" and "Lena"). Have them join the same room.
+2.  In the terminal where Docker Compose is running, find the current leader (initially `server3`).
+3.  Kill the leader container by pressing `Ctrl+C` in the Docker terminal, or by running `docker-compose stop server3`.
+4.  **Observe the server logs**: You will see the other servers detect the failure and elect a new leader (`server2`).
+5.  **Observe the client terminals**: Both clients will briefly lose connection and then automatically reconnect to the new leader. They will be able to continue chatting seamlessly, with their state (username and current room) preserved.
+
+---
 
 ## System Configuration
 
 ### Server Network Details
-Each server listens on two ports: a TCP port for client connections and a UDP port for all inter-server communication (like heartbeats).
 
-| Server ID | Client Port (TCP) | Server Port (UDP) | Ring Position |
-|:----------|:------------------|:------------------|:--------------|
-| `server1` | `8000`            | `8020`            | `0`           |
-| `server2` | `8001`            | `8021`            | `1`           |
-| `server3` | `8002`            | `8022`            | `2`           |
+| Server ID | Hostname (in Docker) | Exposed Port (TCP) | Heartbeat Port (UDP) |
+|:----------|:---------------------|:-------------------|:---------------------|
+| `server1` | `server1`            | `8000`             | `8020`               |
+| `server2` | `server2`            | `8001`             | `8021`               |
+| `server3` | `server3`            | `8002`             | `8022`               |
 
-### Timing Configuration
-- **Heartbeat Interval**: `2.0 seconds`
-- **Failure Detection Time**: `5.0 seconds`
+### Codebase Overview
 
-## Codebase Overview
-
-The project has been simplified to a few key components:
-
--   `server/main.py`: The entry point for starting a server instance via the command line.
--   `server/server.py`: The main server class containing all logic for elections, communication, and state.
+-   `server/server.py`: The main server class containing all logic for elections, state replication, and client handling.
+-   `client/client.py`: The client application with robust reconnection and failover logic.
 -   `server/heartbeat.py`: The module responsible for monitoring server health.
--   `common/config/`: Contains all system configuration, including network ports and timing constants.
--   `scripts/`: Holds the batch scripts for easy cluster management.
-
-## Troubleshooting
-
-If you run into an "address already in use" error, it means another process is occupying a port needed by the servers. You can stop any lingering Python processes to free them up:
-
-```powershell
-taskkill /f /im python.exe
-```
+-   `common/config/`: Contains all system configuration.
+-   `Dockerfile`: Defines the build steps for the server image.
+-   `docker-compose.yml`: Defines the multi-container server cluster.
