@@ -1,0 +1,2 @@
+# No external dependencies are currently used.
+# This file is here for Docker and future package management. 

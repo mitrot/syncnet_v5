@@ -38,45 +38,20 @@ class HeartbeatMonitor:
             return
         self._running = True
         
-        self._thread_send = threading.Thread(target=self._send_heartbeats, daemon=True)
+        # The server is now responsible for sending heartbeats.
+        # This monitor only checks for failures.
         self._thread_check = threading.Thread(target=self._check_failures, daemon=True)
-        
-        self._thread_send.start()
         self._thread_check.start()
-        self.logger.info("Heartbeat monitoring started")
+        self.logger.info("Heartbeat failure detection started")
 
     def stop(self):
         if not self._running:
             return
         self._running = False
         
-        if self._thread_send:
-            self._thread_send.join(timeout=2.0)
         if self._thread_check:
             self._thread_check.join(timeout=2.0)
         self.logger.info("Heartbeat monitoring stopped")
-
-    def _send_heartbeats(self):
-        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as send_socket:
-            send_socket.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
-
-            while self._running:
-                try:
-                    message = {
-                        "type": "heartbeat",
-                        "server_id": self.server_id
-                    }
-                    encoded_message = json.dumps(message).encode()
-                    
-                    for config in DEFAULT_SERVER_CONFIGS:
-                        if config.server_id != self.server_id:
-                            send_socket.sendto(encoded_message, (config.host, config.heartbeat_port))
-                    
-                    self.logger.debug("Sent heartbeat broadcast")
-                except Exception as e:
-                    self.logger.error(f"Error sending heartbeat: {e}")
-                
-                time.sleep(TIMEOUTS['heartbeat_interval'])
 
     def receive_heartbeat(self, data: Dict):
         sender_id = data.get("server_id")

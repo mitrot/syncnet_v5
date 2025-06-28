@@ -4,7 +4,8 @@ import threading
 import json
 import time
 import os
-from typing import Any
+from typing import Any, List, Optional
+import argparse
 
 # Use platform-specific non-blocking input
 try:
@@ -21,15 +22,16 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if project_root not in sys.path:
     sys.path.insert(0, project_root)
 
-from common.config import DEFAULT_SERVER_CONFIGS
+from common.config import DEFAULT_SERVER_CONFIGS, ServerConfig
 
 class SyncNetClient:
     """A command-line client for the SyncNet v5 chat system."""
 
-    def __init__(self):
+    def __init__(self, servers: Optional[List[ServerConfig]] = None):
         self.sock: socket.socket = None
         self.username: str = "Anonymous"
         self.is_connected = False
+        self.servers = servers or DEFAULT_SERVER_CONFIGS
         self.current_server_index = 0
         self._receive_thread = None
         self._running = False
@@ -87,7 +89,7 @@ class SyncNetClient:
                 # first attempt - If it fails, we'll start showing messages.
                 pass
 
-            server_config = DEFAULT_SERVER_CONFIGS[self.current_server_index]
+            server_config = self.servers[self.current_server_index]
             host, port = server_config.host, server_config.tcp_port
             try:
                 if self.sock:
@@ -124,10 +126,10 @@ class SyncNetClient:
                     # Timeout waiting for ack and no redirect occurred. Try next server.
                     self.is_connected = False
                     self.sock.close() 
-                    self.current_server_index = (self.current_server_index + 1) % len(DEFAULT_SERVER_CONFIGS)
+                    self.current_server_index = (self.current_server_index + 1) % len(self.servers)
 
             except (socket.timeout, ConnectionRefusedError, OSError):
-                self.current_server_index = (self.current_server_index + 1) % len(DEFAULT_SERVER_CONFIGS)
+                self.current_server_index = (self.current_server_index + 1) % len(self.servers)
             
             if not self.is_connected and not is_retrying and self._running:
                 print("\n[System] Connection lost. Searching for leader...")
@@ -178,11 +180,31 @@ class SyncNetClient:
             
             # Handle non-printing messages first
             if msg_type == "redirect":
+                leader_host = payload.get("leader_host")
+                leader_port = payload.get("leader_port")
                 leader_id = payload.get("leader_id")
-                for i, config in enumerate(DEFAULT_SERVER_CONFIGS):
-                    if config.server_id == leader_id:
-                        self.current_server_index = i
-                        break
+
+                if not (leader_host and leader_port):
+                    print(f"[Error] Received incomplete redirect information.")
+                    self.redirect_in_progress.set() 
+                    self.is_connected = False
+                    if self.sock: self.sock.close()
+                    return
+
+                # If the client is connecting from outside Docker (e.g., localhost),
+                # it must override the server's advertised Docker hostname with one it can resolve.
+                original_host = self.servers[self.current_server_index].host
+                connect_to_host = leader_host
+                if original_host in ('localhost', '127.0.0.1'):
+                    connect_to_host = 'localhost'
+                    print(f"\n[System] Redirected to leader {leader_id} ({leader_host}:{leader_port}). Connecting via {connect_to_host}:{leader_port}.")
+                else:
+                    print(f"\n[System] Redirected to leader at {leader_host}:{leader_port}")
+
+                # Overwrite the server list to only contain the leader's address.
+                self.servers = [ServerConfig(leader_id, connect_to_host, leader_port, 0, 0)]
+                self.current_server_index = 0
+
                 self.redirect_in_progress.set()
                 self.is_connected = False
                 if self.sock: self.sock.close()
@@ -297,7 +319,7 @@ class SyncNetClient:
             if arg:
                 self.state_change_event.clear()
                 self.send_command("create_room", {"room_name": arg})
-                if not self.state_change_event.wait(timeout=2.0):
+                if not self.state_change_event.wait(timeout=5.0):
                     print("[System] Server did not confirm room creation in time.")
             else:
                 print("Usage: Create <room_name>")
@@ -305,7 +327,7 @@ class SyncNetClient:
              if arg:
                 self.state_change_event.clear()
                 self.send_command("join_room", {"room_name": arg})
-                if not self.state_change_event.wait(timeout=2.0):
+                if not self.state_change_event.wait(timeout=5.0):
                     print("[System] Server did not confirm room join in time.")
              else:
                 print("Usage: Join <room_name>")
@@ -331,7 +353,7 @@ class SyncNetClient:
         if command == "leave":
             self.state_change_event.clear()
             self.send_command("leave_room")
-            if not self.state_change_event.wait(timeout=2.0):
+            if not self.state_change_event.wait(timeout=5.0):
                 print("[System] Server did not confirm leaving room in time.")
         elif command == "whereami":
             self.send_command("whereami")
@@ -393,7 +415,20 @@ class SyncNetClient:
         sys.exit(0)
 
 if __name__ == "__main__":
-    client = SyncNetClient()
+    parser = argparse.ArgumentParser(description="SyncNet v5 Chat Client")
+    parser.add_argument("--host", help="Server host to connect to (overrides default config)")
+    parser.add_argument("--port", type=int, help="Server port to connect to (overrides default config)")
+    args = parser.parse_args()
+
+    custom_servers = None
+    if args.host and args.port:
+        print(f"Attempting to connect to specified server: {args.host}:{args.port}")
+        # Create a dummy ServerConfig for the custom server. The other fields aren't used by the client.
+        custom_servers = [ServerConfig(server_id='custom', host=args.host, tcp_port=args.port, heartbeat_port=0, ring_position=0)]
+    else:
+        print("Starting client with default server list...")
+
+    client = SyncNetClient(servers=custom_servers)
     try:
         client.start()
     except (KeyboardInterrupt, EOFError):

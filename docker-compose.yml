@@ -1,0 +1,34 @@
+services:
+  server1:
+    build: .
+    container_name: syncnet-server1
+    command: python -m server.main --server-id server1
+    ports:
+      - "8000:8000" # Client connections
+      - "8020:8020/udp" # Heartbeat
+    networks:
+      - syncnet_network
+
+  server2:
+    build: .
+    container_name: syncnet-server2
+    command: python -m server.main --server-id server2
+    ports:
+      - "8001:8001" # Client connections
+      - "8021:8021/udp" # Heartbeat
+    networks:
+      - syncnet_network
+      
+  server3:
+    build: .
+    container_name: syncnet-server3
+    command: python -m server.main --server-id server3
+    ports:
+      - "8002:8002" # Client connections
+      - "8022:8022/udp" # Heartbeat
+    networks:
+      - syncnet_network
+
+networks:
+  syncnet_network:
+    driver: bridge 

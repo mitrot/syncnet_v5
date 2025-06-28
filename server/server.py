@@ -105,12 +105,17 @@ class SyncNetServer:
             
             self._setup_sockets()
             
-            self._start_thread(target=self._tcp_accept_loop)
+            # Start network listeners first to ensure they are ready.
             self._start_thread(target=self._udp_listen_loop)
+            self._start_thread(target=self._tcp_accept_loop)
+            
+            # Start the heartbeat sender and failure detector.
+            self._start_thread(target=self._heartbeat_send_loop)
+            self.heartbeat.start()
+
+            # Start the election monitor last, once the communication backbone is stable.
             self._start_thread(target=self._monitor_cluster)
 
-            self.heartbeat.start()
-            
             self.state = ServerState.RUNNING
             self._startup_event.set() # Signal that startup is complete
             self.logger.info(f"Server started successfully on TCP:{self.server_config.tcp_port}")
@@ -160,18 +165,20 @@ class SyncNetServer:
 
     def _setup_sockets(self):
         """Initialize TCP and UDP sockets."""
+        listen_address = '0.0.0.0' # Listen on all available interfaces
+
         self.tcp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         self.tcp_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.tcp_server_socket.bind((self.server_config.host, self.server_config.tcp_port))
+        self.tcp_server_socket.bind((listen_address, self.server_config.tcp_port))
         self.tcp_server_socket.listen(NETWORK_CONSTANTS['max_connections'])
         self.tcp_server_socket.settimeout(1.0)
         
         self.udp_server_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
         self.udp_server_socket.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
-        self.udp_server_socket.bind((self.server_config.host, self.server_config.heartbeat_port))
+        self.udp_server_socket.bind((listen_address, self.server_config.heartbeat_port))
         self.udp_server_socket.settimeout(1.0)
         
-        self.logger.info(f"TCP listening on {self.server_config.tcp_port}, UDP on {self.server_config.heartbeat_port}")
+        self.logger.info(f"TCP listening on {listen_address}:{self.server_config.tcp_port}, UDP on {listen_address}:{self.server_config.heartbeat_port}")
 
     def _close_sockets(self):
         """Close all network sockets."""
@@ -219,8 +226,24 @@ class SyncNetServer:
                 continue
             except Exception as e:
                 if self._running:
-                    self.logger.error(f"UDP listen loop error: {e}")
+                    self.logger.error(f"UDP listen loop error: {e}", exc_info=True)
     
+    def _heartbeat_send_loop(self):
+        """Dedicated loop for sending heartbeats periodically."""
+        # Add a startup delay to ensure all servers are listening before we start sending
+        time.sleep(3) 
+
+        heartbeat_message = {
+            "type": "heartbeat",
+            "server_id": self.server_id
+        }
+        while self._running:
+            try:
+                self._broadcast_udp(heartbeat_message)
+                time.sleep(TIMEOUTS['heartbeat_interval'])
+            except Exception as e:
+                self.logger.error(f"Heartbeat send loop error: {e}", exc_info=True)
+
     def _monitor_cluster(self):
         """Periodically check leader status and run elections if needed."""
         time.sleep(5) # Initial delay to allow cluster to stabilize
@@ -476,12 +499,18 @@ class SyncNetServer:
                 self._cleanup_client(client_id)
                 
     def _broadcast_udp(self, message: Dict):
-        """Broadcast a UDP message to all other servers."""
+        """Broadcast a UDP message to all other servers via unicast."""
         try:
             with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                sock.setsockopt(socket.SOL_SOCKET, socket.SO_BROADCAST, 1)
+                # No broadcast needed; we send directly to each server.
                 encoded_message = json.dumps(message).encode()
+                
                 for config in DEFAULT_SERVER_CONFIGS:
+                    # Don't send to self
+                    if config.server_id == self.server_id:
+                        continue
+                    
+                    self.logger.debug(f"Broadcasting UDP message to {config.host}:{config.heartbeat_port}")
                     # Broadcast to heartbeat port
                     sock.sendto(encoded_message, (config.host, config.heartbeat_port))
         except Exception as e:
@@ -557,10 +586,4 @@ class SyncNetServer:
             client_socket.sendall(json.dumps(redirect_info).encode())
             self.logger.info(f"Redirected client to leader: {self.current_leader}")
         except Exception as e:
-            self.logger.error(f"Failed to send redirect: {e}")
-
-if __name__ == '__main__':
-    # This file is not the entry point. Run server/main.py instead.
-    # This is a temporary measure to prevent accidental execution.
-    import server.main
-    server.main.main() 
+            self.logger.error(f"Failed to send redirect: {e}") 
