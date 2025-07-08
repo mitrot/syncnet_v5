@@ -7,6 +7,7 @@ import os
 from typing import Any, List, Optional
 import argparse
 import random
+import select
 
 # Use platform-specific non-blocking input
 try:
@@ -303,7 +304,40 @@ class SyncNetClient:
         else:
             # Non-Windows implementation would go here
             # not in scope.
-            self._blocking_input_loop()
+            self._handle_unix_input()
+
+    def _handle_unix_input(self):
+        """
+        A self-contained, non-blocking input handler for Unix-like systems.
+        It manages its own terminal state and does not require changes
+        to any other part of the class.
+        """
+        old_settings = termios.tcgetattr(sys.stdin)
+        try:
+            tty.setcbreak(sys.stdin.fileno())
+            
+            # Use select for a non-blocking check on stdin
+            if select.select([sys.stdin], [], [], 0)[0]:
+                char = sys.stdin.read(1)
+                
+                if char in ('\r', '\n'):
+                    sys.stdout.write('\n')
+                    sys.stdout.flush()
+                    self._process_input_buffer()
+                elif char in ('\b', '\x7f'): # Handle backspace
+                    if self._user_input_buffer:
+                        self._user_input_buffer = self._user_input_buffer[:-1]
+                        # Redraw line: move cursor back, write space, move back again
+                        sys.stdout.write('\b \b')
+                        sys.stdout.flush()
+                elif char.isprintable():
+                    self._user_input_buffer += char
+                    sys.stdout.write(char)
+                    sys.stdout.flush()
+                # Ignore other non-printable characters
+        finally:
+            # Always restore the terminal settings
+            termios.tcsetattr(sys.stdin, termios.TCSADRAIN, old_settings)
 
     def _get_prompt(self) -> str:
         return f"[{self.current_room}]> " if self.in_room else "> "
@@ -323,18 +357,6 @@ class SyncNetClient:
         else:
             self._main_loop(user_input)
 
-    def _blocking_input_loop(self):
-        """Fallback to blocking input for non-Windows systems."""
-        try:
-            prompt = self._get_prompt()
-            user_input = input(prompt)
-            if self.in_room:
-                self._room_loop(user_input)
-            else:
-                self._main_loop(user_input)
-        except (EOFError, KeyboardInterrupt):
-            self.stop()
-            
     def _main_loop(self, user_input: str):
         """Handle input when in the main menu (not in a room)."""
         parts = user_input.split(" ", 1)
