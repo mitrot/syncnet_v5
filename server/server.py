@@ -460,10 +460,9 @@ class SyncNetServer:
             sender_name = self.client_identities.get(client_id, {}).get("username", "Unknown")
             chat_message = {"type": "chat", "payload": {"sender_name": sender_name, "message": message}}
             
-            # Broadcast to everyone in the room except the sender
+            # Broadcast to everyone in the room
             for member_id in self.chat_rooms.get(room_name, set()):
-                if member_id != client_id:
-                    self._send_to_client(member_id, chat_message)
+                self._send_to_client(member_id, chat_message)
     
     def _handle_whereami(self, client_id: str, payload: dict):
         with self._lock:
