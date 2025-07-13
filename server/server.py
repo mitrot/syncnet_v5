@@ -498,36 +498,36 @@ class SyncNetServer:
                 self._cleanup_client(client_id)
                 
     def _broadcast_udp(self, message: Dict):
-        """Broadcast a UDP message to all other servers via unicast."""
+        """Broadcast a UDP message to all other servers using the main UDP socket."""
         try:
-            with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
-                encoded_message = json.dumps(message).encode()
-                
-                # Note: get_active_servers() can still include a server that just died,
-                # before the failure detector has officially marked it as FAILED.
-                active_servers = self.heartbeat.get_active_servers()
-                
-                for server_id in active_servers:
-                    if server_id == self.server_id:
-                        continue
-                    
-                    config = next((c for c in DEFAULT_SERVER_CONFIGS if c.server_id == server_id), None)
-                    if not config:
-                        continue
+            encoded_message = json.dumps(message).encode()
+            
+            # Use the main, persistent UDP socket. This is more reliable, especially on macOS.
+            sock = self.udp_server_socket
+            if not sock:
+                self.logger.error("UDP socket is not available for broadcast.")
+                return
 
-                    try:
-                        self.logger.debug(f"Sending UDP message to {config.host}:{config.heartbeat_port}")
-                        sock.sendto(encoded_message, (config.host, config.heartbeat_port))
-                    except socket.gaierror:
-                        # This can happen if a Docker container is killed and its DNS entry is removed.
-                        # It's a non-fatal error in a failover scenario. The heartbeat checker will handle it.
-                        self.logger.debug(f"Could not resolve host {config.host}, it may be down.")
-                    except Exception as e:
-                        self.logger.error(f"Failed to send UDP message to {config.host}: {e}")
+            active_servers = self.heartbeat.get_active_servers()
+            
+            for server_id in active_servers:
+                if server_id == self.server_id:
+                    continue
+                
+                config = next((c for c in DEFAULT_SERVER_CONFIGS if c.server_id == server_id), None)
+                if not config:
+                    continue
+
+                try:
+                    self.logger.debug(f"Sending UDP message to {config.host}:{config.heartbeat_port}")
+                    sock.sendto(encoded_message, (config.host, config.heartbeat_port))
+                except socket.gaierror:
+                    self.logger.debug(f"Could not resolve host {config.host}, it may be down.")
+                except Exception as e:
+                    self.logger.error(f"Failed to send UDP message to {config.host}: {e}")
 
         except Exception as e:
-            # This would be an error creating the socket itself.
-            self.logger.error(f"Failed to create UDP socket for broadcast: {e}")
+            self.logger.error(f"Failed to broadcast UDP message: {e}")
 
     def _replicate_state(self, action: str, data: dict):
         """Broadcast a state change to all other servers."""
